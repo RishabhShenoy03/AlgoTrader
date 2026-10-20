@@ -1,0 +1,22 @@
+# AlgoTrader Ordered TODO (Start to Finish)
+
+- [ ] 1. Define trading scope (asset class, timeframe, market hours, data granularity).
+- [ ] 2. Finalize domain models (`Bar`, `Signal`, `Order`, `Fill`, `Position`).
+- [ ] 3. Set up clean project layout (`include/`, `src/`, `tests/`, `docs/`).
+- [ ] 4. Configure CMake targets for library, executable, and tests.
+- [ ] 5. Implement data feed interface and CSV data feed adapter.
+- [ ] 6. Implement event/backtest engine loop.
+- [ ] 7. Implement strategy interface and one simple baseline strategy.
+- [ ] 8. Implement broker simulator with fees/slippage assumptions.
+- [ ] 9. Implement portfolio accounting (cash, holdings, realized/unrealized PnL).
+- [ ] 10. Implement risk manager (max position size, max leverage, stop conditions).
+- [ ] 11. Add logging and run metadata capture (params, run ID, timestamp).
+- [ ] 12. Add performance analytics (equity curve, drawdown, Sharpe, win rate).
+- [ ] 13. Build CLI/config input to run backtests with parameters.
+- [ ] 14. Write unit tests for each core module.
+- [ ] 15. Write integration tests for end-to-end backtest flow.
+- [ ] 16. Validate baseline results on known datasets.
+- [ ] 17. Add parameter sweep / optimization support.
+- [ ] 18. Add multi-symbol support and portfolio-level constraints.
+- [ ] 19. Add paper-trading adapter reusing strategy and risk interfaces.
+- [ ] 20. Harden error handling, edge cases, and documentation.
