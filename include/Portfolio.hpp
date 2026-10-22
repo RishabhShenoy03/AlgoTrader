@@ -5,23 +5,27 @@
 #include <unordered_map>
 
 class Portfolio {
-public:
+private:
+    double cash_;
+    std::unordered_map<std::uint64_t, Position> holdings_;
+
+    public:
     struct Position {
-        std::int64_t shares{0};
+        double shares{0.0};
         double avg_price{0.0};
     };
 
     explicit Portfolio(double initial_cash);
 
-    bool buy(const std::string& ticker,
+    bool buy(std::uint64_t ticker,
              std::int64_t quantity,
              double price,
              double fee);
 
-    bool sell(const std::string& ticker,
-              std::int64_t quantity,
-              double price,
-              double fee);
+    bool sell(std::uint64_t ticker,
+             std::int64_t quantity,
+             double price,
+             double fee);  
 
     double cash() const noexcept;
 
@@ -33,7 +37,5 @@ public:
         const std::unordered_map<std::string, double>& prices
     ) const;
 
-private:
-    double cash_;
-    std::unordered_map<std::string, Position> holdings_;
+
 };
