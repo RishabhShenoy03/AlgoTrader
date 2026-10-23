@@ -90,9 +90,9 @@ double Portfolio::cash() const noexcept {
 }
 
 // Returns zero if the ticker is not held.
-std::int64_t Portfolio::shares(std::uint64_t ticker) const {
+double Portfolio::shares(std::uint64_t ticker) const {
     if (!holdings_.contains(ticker)) {
-        return 0;
+        return 0.0;
     }
     return holdings_[ticker].shares;
 }

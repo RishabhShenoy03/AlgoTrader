@@ -1,10 +1,8 @@
-#include <chrono>
-
+#include "Bar.hpp"
 
 struct Bar {
-private:
-    std::chrono::time_point timestamp_;
-    std::double close_;
-    std::double open_;
-    std::double
+    std::string date;
+    std::uint64_t ticker;
+    double open;
+    double close;
 };
