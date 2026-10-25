@@ -2,11 +2,16 @@
 #include <string>
 #include <unordered_map>
 #include <cmath>
+#include <stdexcept>
 
 #include "Portfolio.hpp"
 
-explicit Portfolio(double initial_cash)
-    : cash_{initial_cash}, holdings_{} 
+Portfolio::Portfolio(double initial_cash)
+    : cash_{initial_cash}, holdings_{} {
+    if (!std::isfinite(initial_cash) || initial_cash < 0.0) {
+        throw std::invalid_argument("Invalid initial cash");
+    }
+}
 
 bool Portfolio::buy(std::uint64_t ticker,
                     double quantity,
@@ -55,7 +60,7 @@ bool Portfolio::buy(std::uint64_t ticker,
 }
 
 bool Portfolio::sell(std::uint64_t ticker,
-                     std::int64_t quantity,
+                     double quantity,
                      double price,
                      double fee) {
    
@@ -65,7 +70,7 @@ bool Portfolio::sell(std::uint64_t ticker,
         return false;
     }
 
-    // Look up the position without inserting one.
+    // Look up the position, false if does not exist / quantity > owned
     const auto it = holdings_.find(ticker);
     if (it == holdings_.end() || quantity > it->second.shares) {
         return false;
@@ -73,6 +78,10 @@ bool Portfolio::sell(std::uint64_t ticker,
 
     const double proceeds = quantity * price - fee;
     const double new_cash = cash_ + proceeds;
+
+    if (new_cash < 0 || !std::isfinite(new_cash)) {
+        return false;
+    }
     
     if (quantity == it->second.shares) {
         holdings_.erase(it);
@@ -85,12 +94,12 @@ bool Portfolio::sell(std::uint64_t ticker,
     return true;
 }
 
-double Portfolio::cash() const noexcept {
+double Portfolio::cash() noexcept {
     return cash_;
 }
 
 // Returns zero if the ticker is not held.
-double Portfolio::shares(std::uint64_t ticker) const {
+double Portfolio::shares(std::uint64_t ticker) {
     if (!holdings_.contains(ticker)) {
         return 0.0;
     }
@@ -98,11 +107,12 @@ double Portfolio::shares(std::uint64_t ticker) const {
 }
 
 // Requires a current price for every held position.
-double Portfolio::equity(const std::unordered_map<std::uint64_t, double>& prices) const {
-    double result{};
-    for (const auto& holding : holdings_) {
-        result += holding.second.shares * holding.second.avg_price;
+double Portfolio::equity(const std::unordered_map<std::uint64_t, double>& prices) {
+    double result{cash_};
+    for (const auto& [ticker, position] : holdings_) {
+        const double& curr_price = prices.at(ticker);
+        result += curr_price * position.shares;
     }
     return result;
-};
+}
 
