@@ -116,3 +116,18 @@ double Portfolio::equity(const std::unordered_map<std::uint64_t, double>& prices
     return result;
 }
 
+
+// Future implementation templates (existing buy/sell demo stays operational):
+// double Portfolio::cash() const noexcept { /* TODO: Return cash without mutation. */ }
+// double Portfolio::shares(std::uint64_t ticker) const { /* TODO: Lookup without insertion. */ }
+// std::vector<Portfolio::PositionSnapshot> Portfolio::positions() const { /* TODO: Export holdings. */ }
+// void Portfolio::apply_execution(const Fill& fill) {
+//     TODO: Apply confirmed broker truth, including fills beyond local pre-trade limits.
+//     Validate finite inputs; FillProcessor owns deduplication. Reconcile discrepancies.
+// }
+// void Portfolio::apply_commission_delta(double amount) {
+//     TODO: Debit positive corrections, credit negative corrections; reject nonfinite values.
+// }
+// void Portfolio::restore(double cash, const std::vector<PositionSnapshot>& positions) {
+//     TODO: Validate and atomically replace checkpoint state before processing new events.
+// }

@@ -1,0 +1,8 @@
+execute_process(COMMAND "${DEMO}" RESULT_VARIABLE status OUTPUT_VARIABLE output)
+if(NOT status EQUAL 0)
+    message(FATAL_ERROR "Demo failed: ${status}")
+endif()
+set(expected "2026-01-05 | Equity: 1000\nBuy succeeded: 1\n2026-01-06 | Equity: 994\nBuy succeeded: 1\n2026-01-07 | Equity: 1006\n")
+if(NOT output STREQUAL expected)
+    message(FATAL_ERROR "Unexpected demo output: ${output}")
+endif()

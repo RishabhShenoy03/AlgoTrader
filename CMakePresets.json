@@ -11,5 +11,20 @@
                 "CMAKE_EXPORT_COMPILE_COMMANDS": "ON"
             }
         }
+    ],
+    "buildPresets": [
+        {
+            "name": "dev",
+            "configurePreset": "dev"
+        }
+    ],
+    "testPresets": [
+        {
+            "name": "dev",
+            "configurePreset": "dev",
+            "output": {
+                "outputOnFailure": true
+            }
+        }
     ]
 }
