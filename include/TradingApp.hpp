@@ -1,35 +1,38 @@
 #pragma once
 #include "Broker.hpp"
-#include "Strategy.hpp"
-#include "OrderManager.hpp"
-#include "FillProcessor.hpp"
-#include "RiskManager.hpp"
 #include "EventJournal.hpp"
+#include "FillProcessor.hpp"
+#include "OrderManager.hpp"
+#include "RiskManager.hpp"
+#include "Strategy.hpp"
+#include <atomic>
+#include <memory>
 
-// Declaration-only scaffold; implementations are intentionally deferred.
+namespace algo {
 class TradingApp {
-public:
-    // Wire callbacks onto one event loop; dependencies must outlive app.
-    TradingApp(Broker& broker, Strategy& strategy, Portfolio& portfolio, OrderManager& orders, FillProcessor& fills, RiskManager& risk, EventJournal& journal);
-    // Recover journal, connect read-only, reconcile account/positions/orders/executions before enabling decisions.
+  public:
+    TradingApp(Broker &, Strategy &, Portfolio &, OrderManager &, FillProcessor &, RiskManager &,
+               EventJournal &, double max_session_loss = 0.05);
+    ~TradingApp();
     void start();
-    // Poll broker, detect stale data/disconnects, and serialize all state mutations; initial mode is paper only.
     void run();
-    // After synchronization and freshness gates, evaluate strategy, risk-check and journal approved intents before submission.
-    void on_bar(const Bar& bar);
-    // Compare broker truth with recovered state; require completed snapshot and resolve discrepancies before resuming.
-    void reconcile(const BrokerSnapshot& snapshot);
-    // Halt new intents; request cancellations per policy, drain acknowledgements, persist unresolved orders, disconnect and flush.
+    void on_bar(const Bar &bar);
+    void reconcile(const BrokerSnapshot &snapshot);
     void stop();
+    void request_stop() noexcept;
 
-private:
-    Broker& broker_;
-    Strategy& strategy_;
-    Portfolio& portfolio_;
-    OrderManager& orders_;
-    FillProcessor& fills_;
-    RiskManager& risk_;
-    EventJournal& journal_;
-    bool running_{};
+  private:
+    Broker &broker_;
+    Strategy &strategy_;
+    Portfolio &portfolio_;
+    OrderManager &orders_;
+    FillProcessor &fills_;
+    RiskManager &risk_;
+    EventJournal &journal_;
+    std::atomic<bool> running_{false};
     bool reconciled_{};
+    std::string last_bar_;
+    double initial_equity_{};
+    double max_session_loss_;
 };
+} // namespace algo

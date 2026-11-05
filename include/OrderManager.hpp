@@ -1,28 +1,26 @@
 #pragma once
 #include "Broker.hpp"
 #include <unordered_map>
-#include <vector>
+#include <unordered_set>
 
-// Declaration-only scaffold; implementations are intentionally deferred.
+namespace algo {
 class OrderManager {
-public:
-    // Keep broker reference; restore next ID from durable/broker state before trading.
-    explicit OrderManager(Broker& broker);
-    // Called only after risk approval; reserve exposure and persist intent before broker submission; retain ambiguous failures for reconciliation.
-    OrderId submit(Order intent);
-    // Mark pending cancellation; keep reservation until terminal acknowledgement.
+  public:
+    explicit OrderManager(Broker &broker);
+    OrderId submit(Order intent, double reserved_cash = 0, double reserved_shares = 0);
     void cancel(OrderId id);
-    // Handle duplicates and out-of-order events without regressing terminal states; status is not a fill.
-    void on_update(const OrderUpdate& update);
-    // Deduplicate executions and update reservations, never double count cumulative status quantities.
-    void on_fill(const Fill& fill);
-    // Return all outstanding exposure including unknown submissions and pending cancellations.
+    void on_update(const OrderUpdate &update);
+    void on_fill(const Fill &fill);
     std::vector<OrderState> pending() const;
-    // Match durable keys/broker IDs, detect external orders and block trading on unresolved differences.
-    void reconcile(const BrokerSnapshot& snapshot);
+    std::vector<OrderState> all() const;
+    void reconcile(const BrokerSnapshot &snapshot);
 
-private:
-    Broker& broker_;
+  private:
+    Broker &broker_;
     OrderId next_id_{1};
     std::unordered_map<OrderId, OrderState> orders_;
+    std::unordered_set<std::string> executions_;
+    std::unordered_set<std::string> keys_;
+    std::unordered_map<OrderId, double> reported_fills_;
 };
+} // namespace algo

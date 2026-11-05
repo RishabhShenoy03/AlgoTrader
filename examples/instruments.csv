@@ -1,0 +1,5 @@
+ticker,symbol,asset,currency,multiplier,lot_size,tick_size,initial_margin,expiry,strike,right,exchange,con_id
+1,DEMO,stock,USD,1,1,0.01,0,,0,,SMART,0
+2,BTC,crypto,USD,1,0.0001,0.01,0,,0,,PAXOS,0
+3,MES,future,USD,5,1,0.25,1500,2026-12-18,0,,CME,0
+4,DEMO,option,USD,100,1,0.01,0,2026-12-18,100,C,SMART,0

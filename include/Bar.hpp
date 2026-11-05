@@ -2,6 +2,8 @@
 #include <cstdint>
 #include <string>
 
+namespace algo {
+
 // Initial replay format: ISO-8601 trading date, internal instrument ID, open/close.
 // Intraday timestamps, volume and corporate actions are later extensions.
 struct Bar {
@@ -10,3 +12,4 @@ struct Bar {
     double open;
     double close;
 };
+} // namespace algo

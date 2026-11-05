@@ -1,4 +1,3 @@
 #include "Strategy.hpp"
 
-// Intentionally unimplemented. Uncomment one template when implementing its milestone.
-// Until then, using these declarations requires implementations and will fail to link.
+// Strategy is an abstract interface; strategy state and decisions belong to concrete subclasses.

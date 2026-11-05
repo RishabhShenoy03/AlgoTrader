@@ -1,0 +1,18 @@
+# Tested with official TWS API 10.50.02. SDK sources remain outside this repo.
+set(IBKR_SDK_ROOT "" CACHE PATH "Official TWS API root containing source/cppclient/client")
+set(IBKR_CLIENT "${IBKR_SDK_ROOT}/source/cppclient/client")
+if(NOT EXISTS "${IBKR_CLIENT}/EClientSocket.h")
+    message(FATAL_ERROR "Set IBKR_SDK_ROOT to an extracted official TWS API SDK; see docs/IBKR.md")
+endif()
+find_package(Threads REQUIRED)
+find_package(Protobuf REQUIRED)
+find_library(IBKR_DECIMAL_LIBRARY NAMES bidgcc000 bid REQUIRED)
+# Regenerate protobuf to match the installed compiler/runtime, without altering SDK files.
+file(GLOB IBKR_PROTOS CONFIGURE_DEPENDS "${IBKR_SDK_ROOT}/source/proto/*.proto")
+set(PROTOBUF_GENERATE_CPP_APPEND_PATH ON)
+protobuf_generate_cpp(IBKR_PROTO_SOURCES IBKR_PROTO_HEADERS ${IBKR_PROTOS})
+file(GLOB IBKR_SOURCES CONFIGURE_DEPENDS "${IBKR_CLIENT}/*.cpp")
+add_library(ibkr_sdk STATIC ${IBKR_SOURCES} ${IBKR_PROTO_SOURCES})
+target_include_directories(ibkr_sdk SYSTEM PUBLIC "${IBKR_CLIENT}" "${CMAKE_CURRENT_BINARY_DIR}")
+target_link_libraries(ibkr_sdk PUBLIC protobuf::libprotobuf Threads::Threads "${IBKR_DECIMAL_LIBRARY}")
+target_compile_options(ibkr_sdk PRIVATE -w)

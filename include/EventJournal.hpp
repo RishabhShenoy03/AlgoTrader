@@ -1,32 +1,30 @@
 #pragma once
 #include <cstdint>
-#include <fstream>
 #include <string>
 #include <vector>
 
+namespace algo {
 struct JournalRecord {
     std::uint64_t sequence{};
     std::string timestamp;
     std::string type;
-    std::string payload; // Versioned structured serialization, not arbitrary log prose.
+    std::string payload;
 };
-
-// Declaration-only scaffold; implementations are intentionally deferred.
+// Linux/POSIX: exclusive process lock, checksummed records, fdatasync per append.
 class EventJournal {
-public:
-    // Configure versioned append-only journal with account/run identity.
+  public:
     explicit EventJournal(std::string path);
-    // Validate previous records and recover sequence; detect corruption and truncated final writes.
+    ~EventJournal();
+    EventJournal(const EventJournal &) = delete;
+    EventJournal &operator=(const EventJournal &) = delete;
     void open();
-    // Serialize structured payload; ensure durable write before external side effects; fail closed on disk errors.
-    void append(const JournalRecord& record);
-    // Read and validate ordered records; never resubmit orders during replay.
+    void append(const JournalRecord &record);
     std::vector<JournalRecord> replay() const;
-    // Define OS durability guarantees; stream flush alone is not crash durability.
     void flush();
 
-private:
+  private:
     std::string path_;
-    std::ofstream output_;
+    int fd_{-1};
     std::uint64_t next_sequence_{1};
 };
+} // namespace algo

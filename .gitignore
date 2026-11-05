@@ -1,1 +1,4 @@
-build
+/build/
+/results/
+*.journal
+CMakeUserPresets.json

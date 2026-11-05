@@ -3,10 +3,21 @@
 #include <optional>
 #include <string>
 
+namespace algo {
+
 using OrderId = std::uint64_t;
 enum class Side { Buy, Sell };
 enum class OrderType { Market, Limit };
-enum class OrderStatus { PendingSubmit, Submitted, PartiallyFilled, Filled, PendingCancel, Cancelled, Rejected, Unknown };
+enum class OrderStatus {
+    PendingSubmit,
+    Submitted,
+    PartiallyFilled,
+    Filled,
+    PendingCancel,
+    Cancelled,
+    Rejected,
+    Unknown
+};
 
 // Internal ticker IDs must be explicitly resolved to broker contracts.
 struct Order {
@@ -35,3 +46,4 @@ struct OrderState {
     double reserved_cash{};
     double reserved_shares{};
 };
+} // namespace algo

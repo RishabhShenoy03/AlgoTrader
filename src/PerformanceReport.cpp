@@ -1,24 +1,55 @@
 #include "PerformanceReport.hpp"
+#include <algorithm>
+#include <cmath>
+#include <fstream>
+#include <iomanip>
+#include <stdexcept>
 
-// Intentionally unimplemented. Uncomment one template when implementing its milestone.
-// Until then, using these declarations requires implementations and will fail to link.
-
-// void PerformanceReport::record(std::string timestamp, double equity) {
-//     TODO: Append finite timestamp-ordered marked equity after fees; include initial equity.
-// }
-
-// double PerformanceReport::total_return() const {
-//     TODO: Compute final/initial minus one; define empty/zero initial equity error behavior.
-// }
-
-// double PerformanceReport::max_drawdown() const {
-//     TODO: Track running peaks and largest fractional decline; return positive magnitude.
-// }
-
-// void PerformanceReport::write_csv(const std::string& path) const {
-//     TODO: Export timestamp/equity with reproducible precision; report I/O failures.
-// }
-
-// void PerformanceReport::reset() {
-//     TODO: Clear all samples between runs.
-// }
+namespace algo {
+void PerformanceReport::record(std::string timestamp, double equity) {
+    if (!std::isfinite(equity))
+        throw std::invalid_argument("nonfinite equity");
+    if (!equity_.empty() && equity_.back().timestamp != "initial" && timestamp <= equity_.back().timestamp)
+        throw std::invalid_argument("equity timestamps must increase");
+    equity_.push_back({std::move(timestamp), equity});
+}
+double PerformanceReport::total_return() const {
+    if (equity_.empty() || equity_.front().equity <= 0)
+        throw std::runtime_error("return requires positive starting equity");
+    return equity_.back().equity / equity_.front().equity - 1;
+}
+double PerformanceReport::max_drawdown() const {
+    double peak = 0, dd = 0;
+    for (const auto &p : equity_) {
+        peak = std::max(peak, p.equity);
+        if (peak > 0)
+            dd = std::max(dd, (peak - p.equity) / peak);
+    }
+    return dd;
+}
+void PerformanceReport::write_csv(const std::string &path) const {
+    std::ofstream out(path);
+    out << std::setprecision(17) << "timestamp,equity\n";
+    for (const auto &p : equity_)
+        out << p.timestamp << ',' << p.equity << '\n';
+    out.flush();
+    if (!out)
+        throw std::runtime_error("cannot write equity CSV: " + path);
+}
+void PerformanceReport::write_trades(const std::string &path, const FillProcessor &fills) const {
+    std::ofstream out(path);
+    out << std::setprecision(17) << "execution_id,order_id,timestamp,ticker,side,quantity,price\n";
+    for (const auto &f : fills.executions())
+        out << f.execution_id << ',' << f.order_id << ',' << f.executed_at << ',' << f.ticker << ','
+            << (f.side == Side::Buy ? "buy" : "sell") << ',' << f.quantity << ',' << f.price << '\n';
+    out.flush();
+    if (!out)
+        throw std::runtime_error("cannot write trades CSV");
+}
+const std::vector<EquityPoint> &PerformanceReport::points() const noexcept {
+    return equity_;
+}
+void PerformanceReport::reset() {
+    equity_.clear();
+}
+} // namespace algo

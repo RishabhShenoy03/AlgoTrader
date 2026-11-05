@@ -1,32 +1,33 @@
 #pragma once
 #include "Order.hpp"
 #include "Portfolio.hpp"
-#include <string>
 #include <vector>
 
+namespace algo {
 struct RiskLimits {
-    double max_order_notional{};
-    double max_position_notional{};
+    double max_order_notional{100000};
+    double max_position_notional{200000};
     double cash_buffer{};
+    double fee_per_fill{1};
+    double slippage_bps{5};
 };
 struct RiskDecision {
     bool allowed{};
     std::string reason;
+    double reserve_cash{};
+    double reserve_shares{};
 };
-
-// Declaration-only scaffold; implementations are intentionally deferred.
 class RiskManager {
-public:
-    // Validate all limits; remain halted until application reconciliation completes.
+  public:
     explicit RiskManager(RiskLimits limits);
-    // Reject invalid/stale values; include fees, slippage and pending exposure; enforce cash, long-only holdings, order and position limits.
-    RiskDecision evaluate(const Order& intent, const Portfolio& portfolio, const std::vector<OrderState>& pending, double price, bool price_fresh) const;
-    // Latch halt and record reason; cancellation remains available.
+    RiskDecision evaluate(const Order &, const Portfolio &, const std::vector<OrderState> &, double price,
+                          bool price_fresh) const;
     void halt(std::string reason);
-    // Only resume after an explicit application reconciliation gate.
     void resume();
 
-private:
+  private:
     RiskLimits limits_;
     bool halted_{true};
+    std::string reason_{"not reconciled"};
 };
+} // namespace algo

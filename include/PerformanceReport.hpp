@@ -1,24 +1,24 @@
 #pragma once
-#include "Portfolio.hpp"
+#include "FillProcessor.hpp"
 #include <string>
 #include <vector>
 
-struct EquityPoint { std::string timestamp; double equity{}; };
-
-// Declaration-only scaffold; implementations are intentionally deferred.
+namespace algo {
+struct EquityPoint {
+    std::string timestamp;
+    double equity{};
+};
 class PerformanceReport {
-public:
-    // Append finite timestamp-ordered marked equity after fees; include initial equity.
+  public:
     void record(std::string timestamp, double equity);
-    // Compute final/initial minus one; define empty/zero initial equity error behavior.
     double total_return() const;
-    // Track running peaks and largest fractional decline; return positive magnitude.
     double max_drawdown() const;
-    // Export timestamp/equity with reproducible precision; report I/O failures.
-    void write_csv(const std::string& path) const;
-    // Clear all samples between runs.
+    void write_csv(const std::string &path) const;
+    void write_trades(const std::string &path, const FillProcessor &fills) const;
+    const std::vector<EquityPoint> &points() const noexcept;
     void reset();
 
-private:
+  private:
     std::vector<EquityPoint> equity_;
 };
+} // namespace algo

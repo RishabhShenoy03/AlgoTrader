@@ -1,46 +1,40 @@
 #pragma once
 #include "Broker.hpp"
+#include "Instrument.hpp"
 #include <memory>
-
+namespace algo {
 struct IbkrConfig {
-    std::string host;
-    int port{}; // Explicit value from the user's paper TWS/Gateway settings.
-    int client_id{};
+    std::string host{"127.0.0.1"};
+    int port{};
+    int client_id{17};
     std::string paper_account;
     bool read_only{true};
+    std::string currency{"USD"};
+    int timeout_seconds{15};
+    int stale_seconds{30};
 };
-
-// Declaration-only scaffold; implementations are intentionally deferred.
+// Built with official SDK when ALGO_WITH_IBKR=ON. No SDK types escape this header.
 class IbkrBroker : public Broker {
-public:
-    // Store explicit paper connection/account configuration; no SDK dependency in public header.
+  public:
     explicit IbkrBroker(IbkrConfig config);
-    // Disconnect and join reader thread before releasing SDK objects.
     ~IbkrBroker() override;
-    // Request contract details and reject ambiguous matches; initial scope is one stock/ETF.
-    void resolve_instrument(std::uint64_t ticker, std::string symbol, std::string exchange, std::string currency);
-    // Map request ID to resolved contract; retain timestamps and market-data type; detect stale data.
+    void add_instrument(const Instrument &instrument);
     void subscribe(std::uint64_t ticker);
-    // Cancel subscription and retire request mapping safely.
     void unsubscribe(std::uint64_t ticker);
-    // Begin connection; readiness requires completed synchronization. Map SDK callbacks through the serialized event queue.
+    std::vector<Bar> historical_bars(std::uint64_t ticker, const std::string &duration,
+                                     const std::string &bar_size, const std::string &end_time = "");
     void connect() override;
-    // Stop callbacks and join owned threads before destruction. Map SDK callbacks through the serialized event queue.
     void disconnect() override;
-    // False until account, open orders and executions have reconciled. Map SDK callbacks through the serialized event queue.
     bool ready() const override;
-    // Send an order; success here does not mean a fill. Map SDK callbacks through the serialized event queue.
-    void submit(const Order& order) override;
-    // Request cancellation; await broker acknowledgement. Map SDK callbacks through the serialized event queue.
-    void cancel(OrderId id) override;
-    // Request cash, positions, open orders and recent executions. Map SDK callbacks through the serialized event queue.
+    void submit(const Order &) override;
+    void cancel(OrderId) override;
     void request_snapshot() override;
-    // Dispatch queued callbacks on the application thread. Map SDK callbacks through the serialized event queue.
     void poll() override;
-    // Install callbacks before connecting; callbacks must not outlive owners. Map SDK callbacks through the serialized event queue.
-    void set_callbacks(BrokerCallbacks callbacks) override;
+    void set_callbacks(BrokerCallbacks) override;
+    static bool available() noexcept;
 
-private:
-    struct Impl; // Own SDK client, wrapper, reader and callback queue here.
+  private:
+    struct Impl;
     std::unique_ptr<Impl> impl_;
 };
+} // namespace algo

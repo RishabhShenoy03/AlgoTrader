@@ -2,6 +2,8 @@
 #include "Order.hpp"
 #include <string>
 
+namespace algo {
+
 struct Fill {
     std::string execution_id; // Deduplicate before changing cash or holdings.
     OrderId order_id{};
@@ -18,3 +20,4 @@ struct Commission {
     double amount{}; // Total commission for this execution, not a delta.
     std::string currency;
 };
+} // namespace algo

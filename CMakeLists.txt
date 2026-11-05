@@ -1,67 +1,61 @@
 cmake_minimum_required(VERSION 3.21)
-
 project(AlgoTrader LANGUAGES CXX)
 set(CMAKE_CXX_STANDARD 23)
-
-enable_testing()
-
+set(CMAKE_CXX_STANDARD_REQUIRED ON)
+set(CMAKE_CXX_EXTENSIONS OFF)
+include(CTest)
+option(ALGO_WITH_IBKR "Build the official IBKR TWS API adapter" OFF)
+option(ALGO_SANITIZERS "Enable address and undefined-behavior sanitizers" OFF)
 add_library(event_core
-    src/Portfolio.cpp
-    src/free_functions.cpp
-)
-
-target_compile_features(event_core PUBLIC cxx_std_23)
-
-target_compile_options(event_core PRIVATE
-    -Wall
-    -Wextra
-    -Wpedantic
-)
-
-target_include_directories(event_core PUBLIC
-    ${CMAKE_CURRENT_SOURCE_DIR}/include
-)
-
-add_executable(mainmain
-    src/main.cpp
-)
-
-target_link_libraries(mainmain PRIVATE
-    event_core
-)
-
-# Compile-only scaffold: unfinished methods are intentionally not linked into the demo.
-add_library(trading_skeleton OBJECT
-    src/Bar.cpp
-    src/Order.cpp
-    src/Fill.cpp
-    src/CsvDataFeed.cpp
-    src/Strategy.cpp
-    src/MovingAverageStrategy.cpp
-    src/Broker.cpp
-    src/BrokerSim.cpp
-    src/OrderManager.cpp
-    src/FillProcessor.cpp
-    src/RiskManager.cpp
-    src/PerformanceReport.cpp
-    src/Backtester.cpp
-    src/EventJournal.cpp
-    src/IbkrBroker.cpp
-    src/TradingApp.cpp
-)
-target_include_directories(trading_skeleton PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/include)
-target_compile_features(trading_skeleton PRIVATE cxx_std_23)
-target_compile_options(trading_skeleton PRIVATE -Wall -Wextra -Wpedantic)
-
-# Compile every public header independently to catch missing direct includes.
+    src/Instrument.cpp src/Portfolio.cpp src/free_functions.cpp
+    src/CsvDataFeed.cpp src/MovingAverageStrategy.cpp src/BrokerSim.cpp
+    src/OrderManager.cpp src/FillProcessor.cpp src/RiskManager.cpp
+    src/PerformanceReport.cpp src/Backtester.cpp src/EventJournal.cpp
+    src/TradingApp.cpp src/IbkrBroker.cpp)
+target_include_directories(event_core PUBLIC include)
+target_compile_options(event_core PRIVATE -Wall -Wextra -Wpedantic)
+if(ALGO_SANITIZERS)
+    target_compile_options(event_core PUBLIC -fsanitize=address,undefined -fno-omit-frame-pointer)
+    target_link_options(event_core PUBLIC -fsanitize=address,undefined)
+endif()
+if(ALGO_WITH_IBKR)
+    include(cmake/IBKR.cmake)
+    target_compile_definitions(event_core PRIVATE ALGO_WITH_IBKR)
+    target_link_libraries(event_core PRIVATE ibkr_sdk)
+endif()
+add_executable(mainmain src/main.cpp)
+target_link_libraries(mainmain PRIVATE event_core)
+add_executable(algotrader src/cli.cpp)
+target_link_libraries(algotrader PRIVATE event_core)
+target_compile_options(algotrader PRIVATE -Wall -Wextra -Wpedantic)
+# Public headers must be self-contained.
 file(GLOB public_headers CONFIGURE_DEPENDS "${CMAKE_CURRENT_SOURCE_DIR}/include/*.hpp")
 foreach(header IN LISTS public_headers)
     get_filename_component(header_name "${header}" NAME)
     set(check_source "${CMAKE_CURRENT_BINARY_DIR}/header_${header_name}.cpp")
     file(WRITE "${check_source}" "#include \"${header_name}\"\n")
-    target_sources(trading_skeleton PRIVATE "${check_source}")
+    target_sources(event_core PRIVATE "${check_source}")
 endforeach()
-
-add_test(NAME portfolio_demo
-    COMMAND ${CMAKE_COMMAND} -DDEMO=$<TARGET_FILE:mainmain>
-    -P ${CMAKE_CURRENT_SOURCE_DIR}/tests/check_demo.cmake)
+if(BUILD_TESTING)
+    add_test(NAME portfolio_demo COMMAND ${CMAKE_COMMAND} -DDEMO=$<TARGET_FILE:mainmain> -P ${CMAKE_CURRENT_SOURCE_DIR}/tests/check_demo.cmake)
+    add_executable(engine_tests tests/engine_tests.cpp)
+    target_link_libraries(engine_tests PRIVATE event_core)
+    add_test(NAME engine_tests COMMAND engine_tests)
+    if(ALGO_WITH_IBKR)
+        add_executable(ibkr_adapter_tests tests/ibkr_adapter_tests.cpp)
+        target_link_libraries(ibkr_adapter_tests PRIVATE event_core ibkr_sdk)
+        add_test(NAME ibkr_adapter_tests COMMAND ibkr_adapter_tests)
+        set_tests_properties(ibkr_adapter_tests PROPERTIES TIMEOUT 20)
+    endif()
+    add_test(NAME backtest_cli COMMAND algotrader backtest --instruments ${CMAKE_CURRENT_SOURCE_DIR}/examples/instruments.csv --data ${CMAKE_CURRENT_SOURCE_DIR}/examples/bars.csv --strategy sma --window 3 --quantity 1 --output ${CMAKE_CURRENT_BINARY_DIR}/test-results)
+    foreach(strategy IN ITEMS breakout mean-reversion buy-hold)
+        add_test(NAME cli_${strategy} COMMAND algotrader backtest
+            --instruments ${CMAKE_CURRENT_SOURCE_DIR}/examples/instruments.csv
+            --data ${CMAKE_CURRENT_SOURCE_DIR}/examples/bars.csv
+            --strategy ${strategy} --window 3 --quantity 1
+            --from 2026-01-05 --to 2026-01-20
+            --output ${CMAKE_CURRENT_BINARY_DIR}/test-${strategy})
+    endforeach()
+    add_test(NAME cli_rejects_unknown_argument COMMAND algotrader backtest --bogus 1)
+    set_tests_properties(cli_rejects_unknown_argument PROPERTIES WILL_FAIL TRUE)
+endif()
