@@ -2,3 +2,5 @@
 /results/
 *.journal
 CMakeUserPresets.json
+
+__pycache__/

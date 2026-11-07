@@ -47,6 +47,8 @@ struct IbkrBroker::Impl : DefaultEWrapper {
     std::unordered_map<std::uint64_t, int> subscriptions;
     std::unordered_map<int, int> contract_matches;
     std::unordered_set<std::uint64_t> verified_contracts;
+    int quote_request{-1};
+    IbkrQuote watchlist_quote;
     int history_request{-1};
     bool history_done{};
     std::vector<algo::Bar> history;
@@ -93,15 +95,33 @@ struct IbkrBroker::Impl : DefaultEWrapper {
     void error(int id, long long, int code, const std::string &message, const std::string &) override {
         if (code == 2104 || code == 2106 || code == 2158 || code == 2107 || code == 2108)
             return;
-        if (code == 202 && orders.contains(id))
-            return; // cancellation is confirmed by orderStatus.
+        if (code == 202 && orders.contains(id)) {
+            if (callbacks.on_notice)
+                callbacks.on_notice("IBKR 202 order " + std::to_string(orders.at(id).id) + ": " + message);
+            return; // Preserve explanation; cancellation is confirmed by orderStatus.
+        }
         if (code == 201 && orders.contains(id)) {
             const auto &o = orders.at(id);
             if (callbacks.on_order)
                 callbacks.on_order({o.id, OrderStatus::Rejected, 0, o.quantity, message});
             return;
         }
-        fail("IBKR error " + std::to_string(code) + ": " + message);
+        if (quote_request >= 0 && id == quote_request && (code == 10167 || code == 10090)) {
+            if (callbacks.on_notice)
+                callbacks.on_notice("IBKR " + std::to_string(code) + ": " + message);
+            return; // Partial/delayed data notice; actual prices must still arrive.
+        }
+        if (code == 2188 && history_request >= 0 && (id == history_request || id == -1)) {
+            if (callbacks.on_notice)
+                callbacks.on_notice("IBKR 2188: " + message + " Waiting for historical bars/end marker.");
+            return; // Advisory about freshness, not evidence that historical bars were rejected.
+        }
+        std::string hint;
+        if (code == 420 || code == 354 || code == 10089 || code == 10091 || code == 10168 || code == 2188)
+            hint = " Data entitlement missing. Use ibkr-quotes for explicitly delayed watchlist data; "
+                   "this does not enable live bars. Verify API subscriptions/data sharing for the paper login. "
+                   "See docs/IBKR.md for the distinction between quotes, bars and historical data.";
+        fail("IBKR error " + std::to_string(code) + ": " + message + hint);
     }
     void accountSummary(int, const std::string &account, const std::string &tag, const std::string &value,
                         const std::string &currency) override {
@@ -203,6 +223,22 @@ struct IbkrBroker::Impl : DefaultEWrapper {
         else if (fatal.empty())
             verified_contracts.insert(requests.at(req));
         completed();
+    }
+    void marketDataType(int req, int type) override {
+        if (req == quote_request)
+            watchlist_quote.market_data_type = type;
+    }
+    void tickPrice(int req, TickType field, double price, const TickAttrib &) override {
+        if (req != quote_request || !std::isfinite(price) || price <= 0)
+            return;
+        // IBKR tick identifiers: bid/ask/last 1/2/4, delayed 66/67/68.
+        if (field == 1 || field == 66) watchlist_quote.bid = price;
+        if (field == 2 || field == 67) watchlist_quote.ask = price;
+        if (field == 4 || field == 68) watchlist_quote.last = price;
+        if (field == 66 || field == 67 || field == 68) {
+            if (watchlist_quote.market_data_type != 4)
+                watchlist_quote.market_data_type = 3;
+        }
     }
     void historicalData(int req, const ::Bar &b) override {
         if (req != history_request)
@@ -407,29 +443,66 @@ void IbkrBroker::unsubscribe(std::uint64_t id) {
     p.requests.erase(p.subscriptions.at(id));
     p.subscriptions.erase(id);
 }
+IbkrQuote IbkrBroker::quote(std::uint64_t id, int type) {
+    auto &p = *impl_;
+    if (!p.config.read_only)
+        throw std::runtime_error("watchlist quote diagnostics require read-only mode");
+    if (!ready() || type < 1 || type > 4)
+        throw std::invalid_argument("quote requires synchronization and market-data-type 1..4");
+    const auto &contract = p.contracts.at(id);
+    p.watchlist_quote = {};
+    p.watchlist_quote.ticker = id;
+    const int req = p.next_request++;
+    p.quote_request = req;
+    p.client.reqMarketDataType(type);
+    p.client.reqMktData(req, contract, "", false, false, TagValueListSPtr{});
+    try {
+        const auto deadline = std::chrono::steady_clock::now() + std::chrono::seconds(p.config.timeout_seconds);
+        // Allow all quote fields/type notifications to arrive, rather than using the first tick.
+        while (std::chrono::steady_clock::now() < deadline)
+            p.pump();
+        p.client.cancelMktData(req);
+        p.quote_request = -1;
+        if (!p.watchlist_quote.bid && !p.watchlist_quote.ask && !p.watchlist_quote.last)
+            throw std::runtime_error("no watchlist prices returned; check session, exchange and delayed-data availability");
+        return p.watchlist_quote;
+    } catch (...) {
+        p.client.cancelMktData(req);
+        p.quote_request = -1;
+        throw;
+    }
+}
 std::vector<Bar> IbkrBroker::historical_bars(std::uint64_t id, const std::string &duration,
                                              const std::string &bar_size, const std::string &end) {
     auto &p = *impl_;
     if (!ready())
         throw std::runtime_error("not synchronized");
+    const auto &contract = p.contracts.at(id);
     p.history.clear();
     p.history_done = false;
-    p.history_request = p.next_request++;
-    p.requests[p.history_request] = id;
-    p.client.reqHistoricalData(p.history_request, p.contracts.at(id), end, duration, bar_size, "TRADES", 1, 2,
+    const int req = p.next_request++;
+    p.history_request = req;
+    p.requests[req] = id;
+    p.client.reqHistoricalData(req, contract, end, duration, bar_size, "TRADES", 1, 2,
                                false, TagValueListSPtr{});
-    const auto deadline = std::chrono::steady_clock::now() + std::chrono::seconds(p.config.timeout_seconds);
-    while (!p.history_done) {
-        p.pump();
-        if (std::chrono::steady_clock::now() > deadline) {
-            p.client.cancelHistoricalData(p.history_request);
-            throw std::runtime_error("historical data request timed out");
+    try {
+        const auto deadline = std::chrono::steady_clock::now() + std::chrono::seconds(p.config.timeout_seconds);
+        while (!p.history_done) {
+            p.pump();
+            if (std::chrono::steady_clock::now() > deadline)
+                throw std::runtime_error("historical data request timed out");
         }
+        p.requests.erase(req);
+        p.history_request = -1;
+        if (p.history.empty())
+            throw std::runtime_error("no historical data returned");
+        return p.history;
+    } catch (...) {
+        p.client.cancelHistoricalData(req);
+        p.requests.erase(req);
+        p.history_request = -1;
+        throw;
     }
-    if (p.history.empty())
-        throw std::runtime_error("no historical data returned");
-    p.requests.erase(p.history_request);
-    return p.history;
 }
 void IbkrBroker::poll() {
     auto &p = *impl_;
@@ -517,6 +590,9 @@ void IbkrBroker::unsubscribe(std::uint64_t) {
 }
 std::vector<Bar> IbkrBroker::historical_bars(std::uint64_t, const std::string &, const std::string &,
                                              const std::string &) {
+    unavailable();
+}
+IbkrQuote IbkrBroker::quote(std::uint64_t, int) {
     unavailable();
 }
 void IbkrBroker::poll() {

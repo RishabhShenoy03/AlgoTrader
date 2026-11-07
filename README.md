@@ -72,3 +72,7 @@ broker reconciliation and a new journal. See the architecture document before ru
 The adapter is built and tested separately from the offline engine. Real TWS account, market-data
 permissions and paper order validation require a running user session; offline tests cannot certify
 those external services.
+
+## Worked research example
+
+See [Your first strategy investigation](docs/RESEARCH.md) for the downloaded daily-data experiment, reproducible comparison runner, and a staged learning/backtesting plan.

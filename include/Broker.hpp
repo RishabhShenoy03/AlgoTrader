@@ -24,6 +24,8 @@ struct BrokerCallbacks {
     std::function<void(const BrokerSnapshot &)> on_snapshot;
     std::function<void(const Bar &)> on_bar;
     std::function<void(const std::string &)> on_error;
+    // Informational broker messages; these do not halt the session.
+    std::function<void(const std::string &)> on_notice;
 };
 
 class Broker {

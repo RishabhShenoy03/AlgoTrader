@@ -83,3 +83,5 @@ Returns are unannualized because data frequency/calendar are not inferred. Win r
 PnL matching, Sharpe ratio, funding, dividends, borrow costs and tax are not implemented. Compare
 like-for-like data periods and position sizing rather than assuming equal contract counts imply
 equal risk.
+
+A complete worked example, with daily data, fixed research periods, cost stress tests and trade-audit exercises, is in [RESEARCH.md](RESEARCH.md).

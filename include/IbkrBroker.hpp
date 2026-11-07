@@ -2,7 +2,14 @@
 #include "Broker.hpp"
 #include "Instrument.hpp"
 #include <memory>
+#include <optional>
 namespace algo {
+// Watchlist quote only: never treated as a completed bar or executable live price.
+struct IbkrQuote {
+    std::uint64_t ticker{};
+    int market_data_type{}; // 0 unknown, 1 live, 2 frozen, 3 delayed, 4 delayed-frozen.
+    std::optional<double> bid, ask, last;
+};
 struct IbkrConfig {
     std::string host{"127.0.0.1"};
     int port{};
@@ -21,6 +28,8 @@ class IbkrBroker : public Broker {
     void add_instrument(const Instrument &instrument);
     void subscribe(std::uint64_t ticker);
     void unsubscribe(std::uint64_t ticker);
+    // Read-only diagnostic. Waits for the configured timeout and cancels its subscription.
+    IbkrQuote quote(std::uint64_t ticker, int market_data_type = 3);
     std::vector<Bar> historical_bars(std::uint64_t ticker, const std::string &duration,
                                      const std::string &bar_size, const std::string &end_time = "");
     void connect() override;
