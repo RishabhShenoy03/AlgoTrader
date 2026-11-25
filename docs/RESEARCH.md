@@ -210,3 +210,27 @@ correct distributions; futures need explicit rolls, contract multipliers and
 variation/maintenance margin; options need contract selection from point-in-time
 chains, spreads, expiries and exercise/assignment. The current long-option support
 is an accounting starting point, not a complete options-research platform.
+
+## Measuring the rule fairly (`scripts/stage_report.py`)
+
+The runner above starts every strategy cold on the stage date and reports dollars on a
+fixed $10k balance, so the account is a few percent invested and the SMA spends its
+warmup out of the market. `scripts/stage_report.py` fixes measurement only:
+
+- **Warmup** - prepends `--warmup-bars` (default 260) before the scoring window, so
+  every strategy has a live signal on the first scored session. When the dataset starts
+  at the stage start (develop), it burns the first bars as warmup and says so.
+- **Sizing** - cash is set from the highest close in the feed, so a fixed-share account
+  can always afford its position and no signal is rejected for lack of cash.
+- **Metrics** - from `equity.csv` restricted to the scoring window: CAGR, max drawdown,
+  Calmar, exposure and trade count.
+
+```bash
+python3 scripts/stage_report.py --data results/research-aapl-2011-2025/bars.csv \
+  --stage develop --source 'IBKR TRADES daily, split-adjusted, excludes dividends' \
+  --output results/eqm-develop
+```
+
+Absolute CAGR is still diluted by idle cash, because fixed-share sizing in a rising
+price leaves most of the balance uninvested. Compare drawdown, Calmar and exposure
+across runs; do not read the CAGR as the return of a fully invested rule.
