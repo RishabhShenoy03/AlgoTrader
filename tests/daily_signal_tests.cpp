@@ -524,6 +524,9 @@ int main() {
     try {
         test_prior_window();
         test_agrees_with_strategy();
+        check(snapshot_matches_decision(1, 1000, 1, 1000), "unchanged snapshot accepted");
+        check(!snapshot_matches_decision(1, 1000, 0, 1000), "changed position rejected");
+        check(!snapshot_matches_decision(1, 1000, 1, 999), "changed cash rejected");
         test_warmup();
         test_equality();
         test_session_and_freshness();

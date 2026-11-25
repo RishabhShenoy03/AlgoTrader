@@ -15,6 +15,7 @@ class Backtester {
                RiskManager &, PerformanceReport &);
     ~Backtester();
     void run();
+    void set_score_from(std::string date);
     const std::vector<std::string> &decisions() const noexcept;
 
   private:
@@ -30,5 +31,6 @@ class Backtester {
     std::unordered_map<std::uint64_t, double> marks_;
     std::vector<std::string> decisions_;
     bool ran_{};
+    std::string score_from_;
 };
 } // namespace algo

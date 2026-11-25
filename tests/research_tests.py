@@ -34,6 +34,15 @@ with tempfile.TemporaryDirectory() as tmp:
         assert math.isfinite(float(row['net_pnl']))
     manifest = json.loads((output / 'manifest.json').read_text())
     assert manifest['stage'] == 'develop' and len(manifest['commands']) == 8
+    assert manifest['warmup_bars'] == 200 and not manifest['cold_start']
+    score_start = manifest['score_start']
+    for row in rows:
+        assert 0 <= float(row['time_invested_pct']) <= 100
+        assert float(row['average_exposure_pct']) >= 0
+        run = output / row['run']
+        trades = list(csv.DictReader((run / 'trades.csv').open()))
+        assert all(trade['timestamp'] > score_start for trade in trades)
+    assert list(csv.DictReader((output / 'buy-hold-100-base' / 'trades.csv').open()))[0]['timestamp'] > score_start
     assert all(command[1] == 'backtest' for command in manifest['commands'])
     old = (output / 'manifest.json').read_bytes()
     assert subprocess.run(cmd, capture_output=True).returncode != 0

@@ -14,7 +14,17 @@ Backtester::~Backtester() {
 const std::vector<std::string> &Backtester::decisions() const noexcept {
     return decisions_;
 }
+void Backtester::set_score_from(std::string date) {
+    if (!date.empty() && (date.size() != 10 || !valid_timestamp(date)))
+        throw std::invalid_argument("score start requires YYYY-MM-DD");
+    score_from_ = std::move(date);
+}
 void Backtester::batch(const std::vector<Bar> &bars) {
+    if (!score_from_.empty() && bars.front().date.substr(0, 10) < score_from_) {
+        for (const auto &b : bars)
+            (void)strategy_.on_bar(b, portfolio_);
+        return;
+    }
     // Require a current mark for every open position; never silently carry stale prices.
     for (const auto &p : portfolio_.positions()) {
         if (std::none_of(bars.begin(), bars.end(), [&](const auto &b) { return b.ticker == p.ticker; }))

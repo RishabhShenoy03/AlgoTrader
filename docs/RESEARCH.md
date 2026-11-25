@@ -1,3 +1,5 @@
+> **Research update:** The runner now loads a common pre-scoring warmup and reports time invested and average close-of-day exposure in `comparison.csv`. The historical results below used cold starts and are not directly comparable. If the input lacks pre-period history, scoring starts after the required warmup. No exposure-matched benchmark is implemented.
+
 # Your first strategy investigation
 
 Start with [the development report](../results/aapl-trend-development/report.md).

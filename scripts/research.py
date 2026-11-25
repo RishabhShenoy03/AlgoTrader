@@ -45,9 +45,14 @@ def run(args):
         previous = row["date"]
         if any(not math.isfinite(float(row[k])) or float(row[k]) <= 0 for k in ("open", "close")):
             raise ValueError("Invalid price")
-    selected = [r for r in rows if start <= r["date"] <= end]
-    if len(selected) < max(windows) + 252:
-        raise ValueError("Need at least window + 252 bars within the selected period")
+    eligible = [r for r in rows if r["date"] <= end]
+    first = next((i for i, row in enumerate(eligible) if row["date"] >= start), len(eligible))
+    warmup = max(windows)
+    score_index = max(first, warmup)
+    if len(eligible) - score_index < 252:
+        raise ValueError("Need warmup history and at least 252 scored bars")
+    selected = eligible[score_index - warmup:]
+    score_start = eligible[score_index]["date"]
     output = Path(args.output)
     output.mkdir(parents=True, exist_ok=False)  # Never overwrite research evidence.
     shutil.copyfile(args.instruments, output / "instruments.csv")
@@ -60,7 +65,7 @@ def run(args):
                 "cash": args.cash, "quantity": args.quantity, "source": args.source,
                 "full_input_sha256": digest(args.data), "period_input_sha256": digest(output / "bars.csv"),
                 "instrument_sha256": digest(args.instruments), "engine_sha256": digest(binary),
-                "runner_sha256": digest(__file__), "cold_start": True, "commands": []}
+                "runner_sha256": digest(__file__), "cold_start": False, "score_start": score_start, "warmup_bars": warmup, "commands": []}
     results = []
     cases = [("buy-hold", 100)] + [("sma", w) for w in windows]
     for cost, fee, slippage in [("base", 1.10, 5), ("stress", 2.20, 20)]:
@@ -68,7 +73,7 @@ def run(args):
             name = f"{strategy}-{window}-{cost}"
             dest = output / name
             cmd = [str(binary), "backtest", "--instruments", str(output / "instruments.csv"),
-                   "--data", str(output / "bars.csv"), "--strategy", strategy, "--window", str(window),
+                   "--data", str(output / "bars.csv"), "--score-from", score_start, "--strategy", strategy, "--window", str(window),
                    "--cash", str(args.cash), "--quantity", str(args.quantity), "--fee", str(fee),
                    "--slippage-bps", str(slippage), "--output", str(dest)]
             manifest["commands"].append(cmd)
@@ -81,7 +86,22 @@ def run(args):
             trades = list(csv.DictReader((dest / "trades.csv").open()))
             decisions = list(csv.DictReader((dest / "decisions.csv").open()))
             holding = sum(float(t["quantity"]) * (1 if t["side"] == "buy" else -1) for t in trades)
-            results.append({"run": name, "net_pnl": float(summary["final_equity"]) - args.cash,
+            equity = {r["timestamp"]: float(r["equity"]) for r in csv.DictReader((dest / "equity.csv").open())}
+            daily_trades = {}
+            for trade in trades:
+                daily_trades.setdefault(trade["timestamp"], []).append(trade)
+            position = 0.0
+            exposures = []
+            invested = 0
+            for bar in selected:
+                if bar["date"] < score_start:
+                    continue
+                for trade in daily_trades.get(bar["date"], []):
+                    position += float(trade["quantity"]) * (1 if trade["side"] == "buy" else -1)
+                invested += position > 1e-9
+                exposures.append(position * float(bar["close"]) / equity[bar["date"]] if equity[bar["date"]] > 0 else 0)
+            results.append({"run": name, "time_invested_pct": 100 * invested / len(exposures),
+                            "average_exposure_pct": 100 * sum(exposures) / len(exposures), "net_pnl": float(summary["final_equity"]) - args.cash,
                             "return_pct": 100 * float(summary["total_return"]),
                             "drawdown_pct": 100 * float(summary["max_drawdown"]),
                             "executions": int(summary["executions"]), "fees": float(summary["fees"]),
@@ -92,7 +112,7 @@ def run(args):
         writer.writeheader()
         writer.writerows(results)
     text = [f"# {args.stage.title()} experiment", "",
-            f"{selected[0]['date']} to {selected[-1]['date']}; {len(selected)} daily bars.",
+            f"Warmup: {selected[0]['date']} to before {score_start}; scoring: {score_start} to {selected[-1]['date']}.",
             f"Fixed {args.quantity:g} shares per entry; initial cash ${args.cash:g}.", "",
             "| Run | Net P&L | Return % | Drawdown % | Executions | Rejected intents |",
             "| --- | ---: | ---: | ---: | ---: | ---: |"]
@@ -100,8 +120,8 @@ def run(args):
         text.append(f"| {r['run']} | {r['net_pnl']:.2f} | {r['return_pct']:.2f} | "
                     f"{r['drawdown_pct']:.2f} | {r['executions']} | {r['rejected_intents']} |")
     text += ["", "## Interpretation limits", "",
-             "All strategies start flat and cold on the same date. SMA waits its window before trading; "
-             "buy-and-hold enters after the first close. Warmup is included in reported returns. "
+             "All strategies start flat and receive a common pre-scoring warmup without orders. "
+             "Signals start at the first scored close and fills no earlier than the next open. "
              "Fixed-share sizing and idle cash dilute account returns and are not constant-risk allocation.", "",
              "P&L includes open-position marks, but no terminal liquidation costs. "
              "No dividends, interest on idle cash, taxes or corporate-action share changes are modeled. "

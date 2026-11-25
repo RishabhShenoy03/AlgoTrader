@@ -280,6 +280,14 @@ SignalEvaluation evaluate_signal(const std::vector<Bar> &bars, const SignalReque
     return out;
 }
 
+bool snapshot_matches_decision(double expected_shares, double expected_cash,
+                               double actual_shares, double actual_cash) {
+    return std::isfinite(expected_shares) && std::isfinite(expected_cash) &&
+           std::isfinite(actual_shares) && std::isfinite(actual_cash) &&
+           std::abs(expected_shares - actual_shares) <= 1e-9 &&
+           std::abs(expected_cash - actual_cash) <= 1e-6;
+}
+
 Proposal propose_action(const SignalEvaluation &signal, const BrokerView &broker) {
     Proposal proposal;
     if (!signal.ok) {

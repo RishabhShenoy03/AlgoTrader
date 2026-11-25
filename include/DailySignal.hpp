@@ -93,6 +93,9 @@ struct Proposal {
 };
 
 Proposal propose_action(const SignalEvaluation &signal, const BrokerView &broker);
+// Reject changes between the decision and the final broker snapshot.
+bool snapshot_matches_decision(double expected_shares, double expected_cash,
+                               double actual_shares, double actual_cash);
 
 // A bounded limit order derived from the completed close, rounded adversely to the
 // tick. The backtester fills at the next open, so this is the closest executable

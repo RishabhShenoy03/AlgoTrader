@@ -1,9 +1,11 @@
+> **Execution update:** The daily mode can submit a supervised paper order when explicitly enabled. It rechecks position and cash immediately before submission; any change requires reconciliation. This snapshot cannot eliminate changes after the check.
+
 # Daily signal report (read-only)
 
 The first step from research to paper trading: a report that states what the frozen
 SMA rule wants for one instrument, next to what the paper account actually holds.
-It is deliberately **read-only**. There is no code path in this mode that submits,
-modifies or cancels an order, and `--enable-orders` is rejected outright.
+It is read-only by default. Supervised paper execution requires both `--execute`
+and `--enable-orders yes`.
 
 `docs/RESEARCH.md` describes the strategy and the data. This page covers the
 operational command.
@@ -179,12 +181,12 @@ reporting session always connects read-only.
 
 | | This report | `ibkr-paper` |
 | --- | --- | --- |
-| Orders | never sent | sends after `--enable-orders yes` |
+| Orders | opt-in guarded paper execution | sends after `--enable-orders yes` |
 | Input | completed daily bars | five-second live bars |
 | Warmup | 100 sessions | about eight minutes |
 | Decision | stated for a human | applied automatically |
 | Journal | report directory | `EventJournal` with recovery |
-| Risk controls | none needed (no orders) | `RiskManager`, session loss limit |
+| Risk controls | `RiskManager` on opt-in execution | `RiskManager`, session loss limit |
 
 `ibkr-paper --strategy sma --window 100` is **not** this strategy: its 100 bars are
 100 five-second bars. Running the daily rule automatically needs a scheduler that
