@@ -1,0 +1,23 @@
+[Unit]
+Description=AlgoTrader daily SMA signal (paper, read-only by default)
+Documentation=file://%h/Desktop/projects/AlgoTrader/docs/DAILY_SIGNAL.md
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=oneshot
+WorkingDirectory=%h/Desktop/projects/AlgoTrader
+# The account id lives outside the repository:
+#   mkdir -p ~/.config/algotrader && printf 'ALGO_ACCOUNT=DU1234567\n' > ~/.config/algotrader/daily.env
+#   chmod 600 ~/.config/algotrader/daily.env
+EnvironmentFile=%h/.config/algotrader/daily.env
+Environment=LD_LIBRARY_PATH=%h/.local/share/algotrader/build-deps/usr/lib/aarch64-linux-gnu
+# Report only. Add --execute with --enable-orders yes to submit, and only after a
+# supervised run has reconciled the account. The paper Gateway must be logged in and
+# already listening on the port below; this unit does not start it.
+ExecStart=%h/Desktop/projects/AlgoTrader/build/ibkr/algotrader daily-signal \
+    --instruments %h/Desktop/projects/AlgoTrader/examples/ibkr-aapl.csv \
+    --host 127.0.0.1 --port 4002 --account ${ALGO_ACCOUNT} \
+    --window 100 --quantity 1 --wait-until-close \
+    --output results/daily-signal
+TimeoutStartSec=12h

@@ -1,5 +1,8 @@
 #include "Backtester.hpp"
+#include "DailyLedger.hpp"
+#include "DailySignal.hpp"
 #include "IbkrBroker.hpp"
+#include "TradingCalendar.hpp"
 #include "MovingAverageStrategy.hpp"
 #include "TradingApp.hpp"
 #include <algorithm>
@@ -39,6 +42,381 @@ class Strategies final : public Strategy {
         return out;
     }
 };
+// Read-only daily signal report, with an optional guarded paper execution.
+// Nothing is sent unless --execute AND --enable-orders yes are both supplied and the
+// cycle is live, reconciled, unrecorded and approved by RiskManager.
+struct DailyExecution {
+    bool terminal{};
+    bool filled{};
+    double filled_quantity{};
+    std::string status{"unknown"};
+};
+
+DailyExecution submit_daily_order(const IbkrConfig &config, const Instrument &instrument,
+                                  const Order &order, int seconds, EventJournal &journal) {
+    DailyExecution result;
+    IbkrBroker broker(config);
+    broker.add_instrument(instrument);
+    auto snapshot = std::make_shared<BrokerSnapshot>();
+    BrokerCallbacks callbacks;
+    callbacks.on_snapshot = [snapshot](const BrokerSnapshot &s) { *snapshot = s; };
+    callbacks.on_order = [&](const OrderUpdate &update) {
+        result.filled_quantity = std::max(result.filled_quantity, update.filled_quantity);
+        result.terminal = update.status == OrderStatus::Filled ||
+                          update.status == OrderStatus::Cancelled ||
+                          update.status == OrderStatus::Rejected;
+        if (update.status == OrderStatus::Filled)
+            result.status = "filled";
+        else if (update.status == OrderStatus::Cancelled)
+            result.status = "cancelled";
+        else if (update.status == OrderStatus::Rejected)
+            result.status = "rejected";
+        else if (update.status == OrderStatus::PartiallyFilled)
+            result.status = "partially-filled";
+        journal.append({0, "", "order", update.reason});
+    };
+    callbacks.on_fill = [&](const Fill &fill) {
+        result.filled = true;
+        journal.append({0, "", "execution",
+                        fill.execution_id + " " + std::to_string(fill.quantity) + "@" +
+                            std::to_string(fill.price)});
+    };
+    callbacks.on_notice = [&](const std::string &message) {
+        std::cout << "IBKR notice: " << message << '\n';
+        journal.append({0, "", "broker_notice", message});
+    };
+    broker.set_callbacks(callbacks);
+    broker.connect();
+    try {
+        broker.request_snapshot();
+        if (!snapshot->complete)
+            throw std::runtime_error("snapshot did not complete before submission");
+        if (!snapshot->open_orders.empty())
+            throw std::runtime_error("open orders appeared before submission");
+        const auto held = snapshot->positions.find(instrument.ticker);
+        const double shares = held == snapshot->positions.end() ? 0.0 : held->second;
+        journal.append({0, "", "intent",
+                        std::string(side_name(order.side)) + " " + std::to_string(order.quantity) +
+                            " " + instrument.symbol + " at " +
+                            std::to_string(order.limit_price.value_or(0)) + " from " +
+                            std::to_string(shares) + " shares"});
+        broker.submit(order);
+        const auto deadline = std::chrono::steady_clock::now() + std::chrono::seconds(seconds);
+        while (!result.terminal && !interrupted && std::chrono::steady_clock::now() < deadline)
+            broker.poll();
+        if (!result.terminal) {
+            broker.cancel(order.id);
+            const auto cancel_deadline = std::chrono::steady_clock::now() + std::chrono::seconds(10);
+            while (!result.terminal && std::chrono::steady_clock::now() < cancel_deadline)
+                broker.poll();
+            if (!result.terminal)
+                result.status = "uncertain";
+        }
+        broker.disconnect();
+    } catch (...) {
+        broker.disconnect();
+        throw;
+    }
+    return result;
+}
+
+int run_daily_signal(const std::unordered_map<std::string, std::string> &args,
+                     const std::vector<Instrument> &instruments, int argc, char **argv) {
+    auto value = [&](const std::string &key, const std::string &fallback = "") {
+        auto it = args.find(key);
+        return it == args.end() ? fallback : it->second;
+    };
+    auto number = [&](const std::string &key, const std::string &fallback) {
+        const auto text = value(key, fallback);
+        std::size_t used = 0;
+        const double parsed = std::stod(text, &used);
+        if (used != text.size() || !std::isfinite(parsed))
+            throw std::invalid_argument("invalid numeric option " + key);
+        return parsed;
+    };
+    auto whole = [&](const std::string &key, const std::string &fallback) {
+        const double parsed = number(key, fallback);
+        if (parsed < 0 || parsed > 10000000 || std::floor(parsed) != parsed)
+            throw std::invalid_argument("invalid integer option " + key);
+        return static_cast<int>(parsed);
+    };
+
+    if (instruments.size() != 1)
+        throw std::invalid_argument("daily-signal supports exactly one instrument");
+    const auto &instrument = instruments.front();
+    if (instrument.asset_class != AssetClass::Stock)
+        throw std::invalid_argument("daily-signal currently supports one stock/ETF");
+
+    const bool execute = args.contains("--execute");
+    const bool orders_enabled = value("--enable-orders") == "yes";
+    if (args.contains("--enable-orders") && !execute)
+        throw std::invalid_argument(
+            "daily-signal is read-only unless --execute is also given; refusing an order flag on "
+            "its own");
+    if (execute && !orders_enabled)
+        throw std::invalid_argument("--execute requires --enable-orders yes");
+    const bool pump_until_close = args.contains("--wait-until-close");
+
+    SignalRequest request;
+    request.window = static_cast<std::size_t>(whole("--window", "100"));
+    request.quantity = number("--quantity", "1");
+    request.as_of = value("--as-of");
+    request.max_stale_days = whole("--max-stale-days", "5");
+    request.now_unix = static_cast<std::int64_t>(std::time(nullptr));
+    if (!request.as_of.empty() && (request.as_of.size() != 10 || !valid_timestamp(request.as_of)))
+        throw std::invalid_argument("--as-of requires YYYY-MM-DD");
+
+    std::string command;
+    for (int n = 0; n < argc; ++n)
+        command += (n ? " " : "") + std::string(argv[n]);
+
+    const auto bars_path = value("--bars");
+    const auto account = value("--account");
+    const auto port = whole("--port", "0");
+    const bool live = !account.empty() || port != 0;
+    if (bars_path.empty() && !live)
+        throw std::invalid_argument(
+            "daily-signal needs --bars FILE for offline use or --port/--account for a live "
+            "read-only IBKR session");
+    if (live && (account.size() < 3 || !account.starts_with("DU") || port < 1))
+        throw std::invalid_argument("live mode requires --account DU... and a valid --port");
+    if (execute && (!bars_path.empty() || !live))
+        throw std::invalid_argument("--execute needs a live paper session, not --bars");
+    const int band_bps = whole("--limit-band-bps", "25");
+    if (band_bps > 500)
+        throw std::invalid_argument("--limit-band-bps must be 0..500");
+    const auto output_root = value("--output", "results/daily-signal");
+    const auto ledger_path = value("--ledger", output_root + "/ledger.csv");
+
+    if (pump_until_close) {
+        if (!live)
+            throw std::invalid_argument("--wait-until-close needs a live session");
+        if (!is_us_equity_trading_day(utc_date(request.now_unix))) {
+            std::cout << "Daily signal: " << utc_date(request.now_unix)
+                      << " is not a US equity trading day; nothing to do.\n";
+            return 0;
+        }
+        while (!interrupted) {
+            const auto wait =
+                seconds_until_session_cutoff(static_cast<std::int64_t>(std::time(nullptr)));
+            if (wait <= 0)
+                break;
+            std::cout << "Waiting " << wait << "s for the session cutoff (22:00 UTC)\n";
+            std::this_thread::sleep_for(std::chrono::seconds(std::min<std::int64_t>(wait, 30)));
+        }
+        request.now_unix = static_cast<std::int64_t>(std::time(nullptr));
+    }
+
+    std::vector<Bar> bars;
+    BrokerView broker;
+    std::string source;
+
+    if (!bars_path.empty()) {
+        CsvDataFeed feed(bars_path);
+        feed.open();
+        while (auto bar = feed.next())
+            if (bar->ticker == instrument.ticker)
+                bars.push_back(*bar);
+        source = "CSV " + bars_path + " (offline, no broker session)";
+        broker.confirmed = false;
+        broker.error = "offline mode: no broker session was opened (--bars supplied)";
+    }
+
+    if (live) {
+        IbkrConfig config{value("--host", "127.0.0.1"),
+                          port,
+                          whole("--client-id", "17"),
+                          account,
+                          true, // the reporting session is always read-only
+                          value("--currency", "USD"),
+                          whole("--timeout", "15"),
+                          whole("--stale-seconds", "30")};
+        IbkrBroker ibkr(config);
+        ibkr.add_instrument(instrument);
+        auto snapshot = std::make_shared<BrokerSnapshot>();
+        BrokerCallbacks callbacks;
+        callbacks.on_snapshot = [snapshot](const BrokerSnapshot &s) { *snapshot = s; };
+        callbacks.on_notice = [](const std::string &message) {
+            std::cout << "IBKR notice: " << message << '\n';
+        };
+        ibkr.set_callbacks(callbacks);
+        ibkr.connect();
+        try {
+            std::string snapshot_error;
+            try {
+                ibkr.request_snapshot();
+            } catch (const std::exception &e) {
+                snapshot_error = e.what();
+            }
+            if (snapshot_error.empty() && snapshot->complete) {
+                broker.confirmed = true;
+                broker.account = snapshot->account;
+                broker.currency = snapshot->currency;
+                broker.cash = snapshot->cash;
+                const auto it = snapshot->positions.find(instrument.ticker);
+                broker.shares = it == snapshot->positions.end() ? 0.0 : it->second;
+                for (const auto &state : snapshot->open_orders)
+                    if (state.order.ticker == instrument.ticker)
+                        broker.open_orders.push_back(state);
+            } else {
+                broker.confirmed = false;
+                broker.error = snapshot_error.empty() ? "snapshot did not complete" : snapshot_error;
+            }
+            if (bars_path.empty()) {
+                if (!broker.confirmed)
+                    throw std::runtime_error(
+                        "cannot read historical bars after an incomplete snapshot: " +
+                        broker.error +
+                        "; rerun with --bars FILE to report the signal while the broker state is "
+                        "unknown");
+                bars = ibkr.historical_bars(instrument.ticker, value("--duration", "2 Y"), "1 day",
+                                            value("--end-time", ""));
+                source = "IBKR Gateway " + value("--host", "127.0.0.1") + ":" +
+                         std::to_string(port) + ", contract " + std::to_string(instrument.con_id) +
+                         " " + instrument.symbol + ", TRADES, regular hours, duration " +
+                         value("--duration", "2 Y") + ", bars 1 day, retrieved " +
+                         utc_timestamp(request.now_unix);
+            }
+            ibkr.disconnect();
+        } catch (...) {
+            ibkr.disconnect();
+            throw;
+        }
+    }
+
+    const auto signal = evaluate_signal(bars, request);
+    const auto proposal = propose_action(signal, broker);
+
+    std::vector<Bar> bars_used;
+    if (signal.ok) {
+        std::size_t decision_index = bars.size() - 1;
+        for (std::size_t i = 0; i < bars.size(); ++i)
+            if (bars[i].date == signal.decision_date)
+                decision_index = i;
+        const auto first = static_cast<std::ptrdiff_t>(decision_index - signal.window);
+        bars_used.assign(bars.begin() + first,
+                         bars.begin() + static_cast<std::ptrdiff_t>(decision_index) + 1);
+    } else if (!bars.empty()) {
+        bars_used.assign(bars.end() - 1, bars.end());
+    }
+
+    ReportContext context{instrument.symbol, instrument.currency, source, command, request.now_unix};
+    const auto files = write_signal_report(output_root, signal, broker, proposal, context, bars_used);
+
+    std::cout << "Daily signal: " << instrument.symbol << '\n';
+    if (signal.ok) {
+        std::cout << "  decision session " << signal.decision_date << " close "
+                  << signal.decision_close << " " << instrument.currency << '\n'
+                  << "  prior " << signal.window << "-session average " << signal.prior_average
+                  << " (" << signal.window_first << " to " << signal.window_last << ")\n"
+                  << "  signal " << signal_state_name(signal.state) << '\n';
+    } else {
+        std::cout << "  signal unavailable: " << signal.error << '\n';
+    }
+    if (broker.confirmed)
+        std::cout << "  broker " << broker.account << " position " << broker.shares
+                  << " share(s), " << broker.open_orders.size() << " open order(s), cash "
+                  << broker.cash << " " << broker.currency << '\n';
+    else
+        std::cout << "  broker state unknown: " << broker.error << '\n';
+    std::cout << "  status " << proposal_status_name(proposal.status) << ": "
+              << (signal.ok ? proposal.reason : signal.error) << '\n';
+    if (proposal.status == ProposalStatus::Actionable && proposal.side)
+        std::cout << "  proposed " << side_name(*proposal.side) << " " << proposal.quantity
+                  << " share(s) — NOT SUBMITTED\n";
+    std::cout << "  report " << files.markdown << '\n';
+
+    // A failed evaluation has no decision session; record the newest bar instead so the
+    // run is still auditable, and skip the ledger entirely if there is no bar at all.
+    const std::string ledger_session =
+        signal.ok ? signal.decision_date : (bars.empty() ? std::string() : bars.back().date);
+    LedgerEntry entry{utc_timestamp(request.now_unix),
+                      ledger_session,
+                      instrument.symbol,
+                      signal.ok ? signal_state_name(signal.state) : "unavailable",
+                      signal.ok && signal.target_shares
+                          ? std::to_string(static_cast<int>(*signal.target_shares))
+                          : std::string("retain"),
+                      broker.confirmed ? std::to_string(static_cast<int>(broker.shares)) : "unknown",
+                      broker.confirmed ? std::to_string(broker.open_orders.size()) : "unknown",
+                      proposal_status_name(proposal.status),
+                      "",
+                      "",
+                      "",
+                      files.directory};
+
+    if (!execute) {
+        if (ledger_session.empty()) {
+            std::cout << "  ledger skipped: no session or bar to record\n";
+        } else {
+            append_ledger(ledger_path, entry);
+            std::cout << "  ledger " << ledger_path << '\n';
+        }
+        return signal.ok ? 0 : 1;
+    }
+
+    // ---- guarded paper execution -------------------------------------------------
+    const auto plan = plan_execution(signal, proposal, instrument.tick_size, band_bps);
+    if (proposal.status != ProposalStatus::Actionable || !proposal.side)
+        throw std::runtime_error("nothing to execute: " + proposal.reason);
+    if (!plan.ok)
+        throw std::runtime_error("no execution plan: " + plan.error);
+    if (ledger_has_session(ledger_path, instrument.symbol, signal.decision_date))
+        throw std::runtime_error("session " + signal.decision_date + " is already recorded in " +
+                                 ledger_path + "; refusing to trade it twice");
+
+    Portfolio portfolio(broker.cash, instrument.currency);
+    portfolio.add_instrument(instrument);
+    if (std::abs(broker.shares) > 1e-9)
+        portfolio.restore(broker.cash, {{instrument.ticker, broker.shares, 0.0}});
+    RiskManager risk({number("--max-order", "1000"), number("--max-position", "1000"),
+                      number("--cash-buffer", "100"), number("--fee", "1.1"),
+                      number("--slippage-bps", "5")});
+    risk.resume(); // the snapshot taken by this run is the reconciliation
+    Order order;
+    order.id = 1;
+    order.client_key = "daily/" + signal.decision_date + "/" + instrument.symbol + "/" +
+                       (plan.side == Side::Buy ? "buy" : "sell");
+    order.ticker = instrument.ticker;
+    order.side = plan.side;
+    order.type = OrderType::Limit;
+    order.quantity = plan.quantity;
+    order.limit_price = plan.limit_price;
+    order.created_at = utc_timestamp(request.now_unix);
+    const auto decision =
+        risk.evaluate(order, portfolio, broker.open_orders, plan.reference_close, true);
+    if (!decision.allowed)
+        throw std::runtime_error("risk manager refused the order: " + decision.reason);
+
+    entry.status = "EXEC:INTENT";
+    entry.side = side_name(plan.side);
+    entry.quantity = std::to_string(static_cast<int>(plan.quantity));
+    entry.limit_price = std::to_string(plan.limit_price);
+    append_ledger(ledger_path, entry);
+
+    EventJournal journal(files.directory + "/execution.journal");
+    journal.open();
+    const auto execution = submit_daily_order(
+        IbkrConfig{value("--host", "127.0.0.1"), port, whole("--client-id", "17"), account,
+                   false, // submission needs the paper account's Read-Only API setting off
+                   value("--currency", "USD"), whole("--timeout", "15"),
+                   whole("--stale-seconds", "30")},
+        instrument, order, whole("--seconds", "120"), journal);
+
+    entry.status = "EXEC:" + (execution.status == "unknown" ? std::string("uncertain")
+                                                          : execution.status);
+    entry.quantity = std::to_string(static_cast<int>(execution.filled_quantity));
+    append_ledger(ledger_path, entry);
+
+    std::cout << "  execution " << execution.status << ": filled " << execution.filled_quantity
+              << " of " << plan.quantity << " at limit " << plan.limit_price << " (journal "
+              << files.directory << "/execution.journal)\n";
+    if (execution.status == "uncertain")
+        std::cout << "  WARNING: outcome unconfirmed — reconcile the paper account before the next "
+                     "run\n";
+    return 0;
+}
+
 void help() {
     std::cout << R"(AlgoTrader: C++ backtesting and IBKR paper trading
 
@@ -52,6 +430,10 @@ algotrader ibkr-history --instruments FILE --port PORT --account DU... --output 
 algotrader ibkr-buy --instruments FILE --port PORT --account DU... --limit-price PRICE
   Preview by default; add --enable-orders yes to send ONE stock share (maximum limit $1000).
 algotrader ibkr-paper --instruments FILE --port PORT --account DU... --enable-orders yes [options]
+algotrader daily-signal --instruments FILE [--bars FILE | --port PORT --account DU...] [options]
+  Daily SMA report: prior-window average, strategy target, broker position and open
+  orders. Read-only unless --execute --enable-orders yes are BOTH given.
+  --bars uses a CSV export and no broker; --wait-until-close blocks to 22:00 UTC.
 
 Options (all values explicit):
   --strategy sma|breakout|mean-reversion|buy-hold   default sma
@@ -81,7 +463,7 @@ int main(int argc, char **argv) {
             return 0;
         }
         const std::string mode = argv[1];
-        if (mode != "backtest" && mode != "ibkr-readonly" && mode != "ibkr-paper" && mode != "ibkr-history" && mode != "ibkr-buy" && mode != "ibkr-status" && mode != "ibkr-quotes")
+        if (mode != "backtest" && mode != "daily-signal" && mode != "ibkr-readonly" && mode != "ibkr-paper" && mode != "ibkr-history" && mode != "ibkr-buy" && mode != "ibkr-status" && mode != "ibkr-quotes")
             throw std::invalid_argument("unknown mode; use --help");
         std::unordered_map<std::string, std::string> args;
         const std::set<std::string> allowed = {"--instruments",   "--data",        "--strategy",
@@ -93,10 +475,25 @@ int main(int argc, char **argv) {
                                                "--account",       "--seconds",     "--journal",
                                                "--enable-orders", "--timeout",     "--stale-seconds",
                                                "--from",          "--to",          "--max-session-loss",
-                                               "--duration",      "--bar-size",    "--end-time", "--limit-price", "--market-data-type"};
-        for (int i = 2; i < argc; i += 2) {
-            if (i + 1 >= argc || !allowed.contains(argv[i]) || !args.emplace(argv[i], argv[i + 1]).second)
+                                               "--duration",      "--bar-size",    "--end-time", "--limit-price", "--market-data-type",
+                                               "--bars",          "--as-of",       "--max-stale-days",
+                                               "--ledger",        "--limit-band-bps", "--execute",
+                                               "--wait-until-close"};
+        // Most options take a value; a few are bare switches.
+        const std::set<std::string> switches = {"--execute", "--wait-until-close"};
+        for (int i = 2; i < argc;) {
+            const std::string key = argv[i];
+            if (!allowed.contains(key))
+                throw std::invalid_argument("invalid option " + key);
+            if (switches.contains(key)) {
+                if (!args.emplace(key, "true").second)
+                    throw std::invalid_argument("duplicate option " + key);
+                i += 1;
+                continue;
+            }
+            if (i + 1 >= argc || !args.emplace(key, argv[i + 1]).second)
                 throw std::invalid_argument("invalid, duplicate or missing option value");
+            i += 2;
         }
         auto value = [&](const std::string &key, const std::string &fallback = "") {
             return args.contains(key) ? args.at(key) : fallback;
@@ -116,6 +513,8 @@ int main(int argc, char **argv) {
             return static_cast<int>(x);
         };
         const auto instruments = load_instruments(value("--instruments"));
+        if (mode == "daily-signal")
+            return run_daily_signal(args, instruments, argc, argv);
         Portfolio portfolio(num("--cash", "100000"), value("--currency", "USD"));
         for (const auto &i : instruments)
             portfolio.add_instrument(i);
