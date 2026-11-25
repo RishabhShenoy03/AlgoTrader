@@ -15,6 +15,14 @@ MovingAverageStrategy::MovingAverageStrategy(std::uint64_t ticker, std::size_t w
 void MovingAverageStrategy::reset() {
     closes_.clear();
 }
+double MovingAverageStrategy::average() const {
+    return std::accumulate(closes_.begin(), closes_.end(), 0.0) / static_cast<double>(window_);
+}
+std::optional<double> MovingAverageStrategy::prior_average() const {
+    if (closes_.size() != window_)
+        return std::nullopt;
+    return average();
+}
 std::vector<Order> MovingAverageStrategy::on_bar(const Bar &b, const Portfolio &p) {
     if (b.ticker != ticker_)
         return {};
@@ -22,8 +30,7 @@ std::vector<Order> MovingAverageStrategy::on_bar(const Bar &b, const Portfolio &
     if (kind_ == StrategyKind::BuyAndHold)
         buy = true;
     else if (closes_.size() == window_) {
-        const double mean =
-            std::accumulate(closes_.begin(), closes_.end(), 0.0) / static_cast<double>(window_);
+        const double mean = average();
         if (kind_ == StrategyKind::MovingAverage) {
             buy = b.close > mean;
             sell = b.close < mean;
@@ -51,5 +58,5 @@ std::vector<Order> MovingAverageStrategy::on_bar(const Bar &b, const Portfolio &
         return {o};
     }
     return {};
-}
+}   
 } // namespace algo

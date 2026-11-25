@@ -1,0 +1,12 @@
+[Unit]
+Description=AlgoTrader daily signal after the US equity close
+
+[Timer]
+# 22:10 UTC: 16:10 New York in winter, 18:10 in summer — after the 22:00 UTC cutoff
+# the report uses, on weekdays only. US market holidays are skipped inside the run.
+OnCalendar=Mon..Fri 22:10 UTC
+Persistent=true
+Unit=algotrader-daily-signal.service
+
+[Install]
+WantedBy=timers.target

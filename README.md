@@ -41,6 +41,8 @@ or add them to your debugger configuration.
 - [Strategy guide](docs/STRATEGIES.md): built-in parameters, a custom strategy example, evaluation workflow.
 - [IBKR setup](docs/IBKR.md): SDK build, account setup, read-only check, historical export and paper run.
 - [Architecture and limitations](docs/ARCHITECTURE.md): event order, risk controls, journals and recovery.
+- [Daily signal report](docs/DAILY_SIGNAL.md): read-only SMA signal for one instrument, with the
+  live paper position and open orders, written to its own results directory.
 - [Next milestones](ROADMAP.md): remaining work beyond this implementation.
 
 ```sh
@@ -72,6 +74,23 @@ broker reconciliation and a new journal. See the architecture document before ru
 The adapter is built and tested separately from the offline engine. Real TWS account, market-data
 permissions and paper order validation require a running user session; offline tests cannot certify
 those external services.
+
+## Daily signal report (read-only)
+
+```sh
+# Offline replay of a completed session from an exported CSV (no broker session):
+./build/dev/algotrader daily-signal \
+  --instruments examples/ibkr-aapl.csv --bars results/research-aapl-2011-2025/bars.csv \
+  --window 100 --quantity 1 --as-of 2025-12-31 --output results/daily-signal
+
+# Live read-only report from the paper account (needs a running Gateway):
+./build/ibkr/algotrader daily-signal \
+  --instruments examples/ibkr-aapl.csv --port 4002 --account DU_YOUR_ACCOUNT \
+  --window 100 --quantity 1 --output results/daily-signal
+```
+
+It states the prior-window average, the strategy target and the actual broker position; it never
+submits an order. See [docs/DAILY_SIGNAL.md](docs/DAILY_SIGNAL.md).
 
 ## Worked research example
 
