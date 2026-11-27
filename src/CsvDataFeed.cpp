@@ -1,6 +1,7 @@
 #include "CsvDataFeed.hpp"
 #include "Instrument.hpp"
 #include <charconv>
+#include <algorithm>
 #include <cmath>
 #include <sstream>
 #include <stdexcept>
@@ -20,8 +21,15 @@ void CsvDataFeed::open() {
         throw std::runtime_error("cannot read CSV: " + path_);
     if (!header.empty() && header.back() == '\r')
         header.pop_back();
-    if (header != "date,ticker,open,close")
-        throw std::runtime_error("CSV header must be date,ticker,open,close");
+    if (header == "date,ticker,open,close")
+        columns_ = 4;
+    else if (header == "date,ticker,open,high,low,close")
+        columns_ = 6;
+    else if (header == "date,ticker,open,high,low,close,volume")
+        columns_ = 7;
+    else
+        throw std::runtime_error(
+            "CSV header must be date,ticker,open,close or date,ticker,open,high,low,close[,volume]");
 }
 void CsvDataFeed::reset() {
     open();
@@ -44,8 +52,8 @@ std::optional<Bar> CsvDataFeed::read_next() {
         std::string v;
         while (std::getline(in, v, ','))
             f.push_back(v);
-        if (f.size() != 4 || line.back() == ',')
-            throw std::runtime_error("expected four columns");
+        if (static_cast<int>(f.size()) != columns_ || line.back() == ',')
+            throw std::runtime_error("expected " + std::to_string(columns_) + " columns");
         Bar b{f[0], 0, 0, 0};
         if (!valid_timestamp(b.date))
             throw std::runtime_error("expected ISO date or UTC timestamp YYYY-MM-DDTHH:MM:SSZ");
@@ -56,10 +64,28 @@ std::optional<Bar> CsvDataFeed::read_next() {
         b.open = std::stod(f[2], &n);
         if (n != f[2].size())
             throw std::runtime_error("invalid open");
-        b.close = std::stod(f[3], &n);
-        if (n != f[3].size() || !std::isfinite(b.open) || !std::isfinite(b.close) || b.open <= 0 ||
-            b.close <= 0)
+        b.close = std::stod(f[columns_ == 4 ? 3 : 5], &n);
+        if (n != (columns_ == 4 ? f[3] : f[5]).size() || !std::isfinite(b.open) ||
+            !std::isfinite(b.close) || b.open <= 0 || b.close <= 0)
             throw std::runtime_error("prices must be finite and positive");
+        if (columns_ == 4) {
+            b = with_range(b);
+        } else {
+            b.high = std::stod(f[3], &n);
+            if (n != f[3].size() || !std::isfinite(b.high) || b.high <= 0)
+                throw std::runtime_error("invalid high");
+            b.low = std::stod(f[4], &n);
+            if (n != f[4].size() || !std::isfinite(b.low) || b.low <= 0)
+                throw std::runtime_error("invalid low");
+            if (columns_ == 7) {
+                b.volume = std::stod(f[6], &n);
+                if (n != f[6].size() || !std::isfinite(b.volume) || b.volume < 0)
+                    throw std::runtime_error("invalid volume");
+            }
+            if (b.high < std::max(b.open, b.close) - 1e-9 || b.low > std::min(b.open, b.close) + 1e-9 ||
+                b.high < b.low)
+                throw std::runtime_error("high/low must contain open/close");
+        }
         if (!last_date_.empty() && (b.date.size() != last_date_.size() || b.date < last_date_))
             throw std::runtime_error("timestamps must be ordered and use one format");
         if (b.date != last_date_)

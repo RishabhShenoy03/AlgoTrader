@@ -22,5 +22,6 @@ class CsvDataFeed {
     std::size_t line_number_{};
     std::string last_date_;
     std::unordered_set<std::uint64_t> seen_;
+    int columns_{4}; // 4 = open/close only, 6 = OHLC, 7 = OHLCV
 };
 } // namespace algo

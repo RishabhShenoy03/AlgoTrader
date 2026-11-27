@@ -753,9 +753,10 @@ int main(int argc, char **argv) {
                     const std::filesystem::path output = value("--output", "results/history");
                     std::filesystem::create_directories(output);
                     std::ofstream out(output / "bars.csv");
-                    out << std::setprecision(17) << "date,ticker,open,close\n";
+                    out << std::setprecision(17) << "date,ticker,open,high,low,close,volume\n";
                     for (const auto &b : bars)
-                        out << b.date << ',' << b.ticker << ',' << b.open << ',' << b.close << '\n';
+                        out << b.date << ',' << b.ticker << ',' << b.open << ',' << b.high << ','
+                            << b.low << ',' << b.close << ',' << b.volume << '\n';
                     out.flush();
                     if (!out)
                         throw std::runtime_error("historical CSV write failed");

@@ -265,7 +265,10 @@ struct IbkrBroker::Impl : DefaultEWrapper {
             fail("invalid historical bar");
             return;
         }
-        history.push_back({date, requests.at(req), b.open, b.close});
+        history.push_back({date, requests.at(req), b.open, b.close,
+                           std::max(b.high, std::max(b.open, b.close)),
+                           std::min(b.low, std::min(b.open, b.close)),
+                           std::max(0.0, DecimalFunctions::decimalToDouble(b.volume))});
     }
     void historicalDataEnd(int req, const std::string &, const std::string &) override {
         if (req == history_request)

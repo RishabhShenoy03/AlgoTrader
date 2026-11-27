@@ -32,8 +32,11 @@ def run(args):
     if any(w < 2 or w > 250 for w in windows):
         raise ValueError("window must be 2..250")
     rows = list(csv.DictReader(Path(args.data).open()))
-    if not rows or list(rows[0]) != ["date", "ticker", "open", "close"]:
-        raise ValueError("Expected engine CSV: date,ticker,open,close")
+    allowed = (["date", "ticker", "open", "close"],
+               ["date", "ticker", "open", "high", "low", "close"],
+               ["date", "ticker", "open", "high", "low", "close", "volume"])
+    if not rows or list(rows[0]) not in allowed:
+        raise ValueError("Expected engine CSV: date,ticker,open[,high,low],close[,volume]")
     previous = ""
     for row in rows:
         from datetime import date
@@ -43,8 +46,14 @@ def run(args):
         if row["date"] <= previous or row["ticker"] != instruments[0]["ticker"]:
             raise ValueError("Data must be sorted, unique and match the single instrument")
         previous = row["date"]
-        if any(not math.isfinite(float(row[k])) or float(row[k]) <= 0 for k in ("open", "close")):
+        prices = ["open", "close"] + (["high", "low"] if "high" in row else [])
+        if any(not math.isfinite(float(row[k])) or float(row[k]) <= 0 for k in prices):
             raise ValueError("Invalid price")
+        if "high" in row:
+            hi, lo = float(row["high"]), float(row["low"])
+            if hi < max(float(row["open"]), float(row["close"])) - 1e-9 or \
+               lo > min(float(row["open"]), float(row["close"])) + 1e-9 or hi < lo:
+                raise ValueError("high/low must contain open/close")
     selected = [r for r in rows if start <= r["date"] <= end]
     if len(selected) < max(windows) + 252:
         raise ValueError("Need at least window + 252 bars within the selected period")
@@ -52,7 +61,7 @@ def run(args):
     output.mkdir(parents=True, exist_ok=False)  # Never overwrite research evidence.
     shutil.copyfile(args.instruments, output / "instruments.csv")
     with (output / "bars.csv").open("w", newline="") as f:
-        writer = csv.DictWriter(f, fieldnames=["date", "ticker", "open", "close"])
+        writer = csv.DictWriter(f, fieldnames=list(rows[0]))
         writer.writeheader()
         writer.writerows(selected)
     manifest = {"stage": args.stage, "from": start, "to": end, "actual_first": selected[0]["date"],

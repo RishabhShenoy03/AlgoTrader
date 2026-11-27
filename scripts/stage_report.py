@@ -35,8 +35,11 @@ COSTS = [("base", 1.10, 5), ("stress", 2.20, 20)]
 
 def load_bars(path):
     rows = list(csv.DictReader(Path(path).open()))
-    if not rows or list(rows[0]) != ["date", "ticker", "open", "close"]:
-        raise ValueError("expected engine CSV: date,ticker,open,close")
+    allowed = (["date", "ticker", "open", "close"],
+               ["date", "ticker", "open", "high", "low", "close"],
+               ["date", "ticker", "open", "high", "low", "close", "volume"])
+    if not rows or list(rows[0]) not in allowed:
+        raise ValueError("expected engine CSV: date,ticker,open[,high,low],close[,volume]")
     previous = ""
     for row in rows:
         if len(row["date"]) != 10:
@@ -136,7 +139,7 @@ def run(args):
     output.mkdir(parents=True, exist_ok=False)
     shutil.copyfile(args.instruments, output / "instruments.csv")
     with (output / "bars.csv").open("w", newline="") as f:
-        writer = csv.DictWriter(f, fieldnames=["date", "ticker", "open", "close"])
+        writer = csv.DictWriter(f, fieldnames=list(rows[0]))
         writer.writeheader()
         writer.writerows(feed)
 

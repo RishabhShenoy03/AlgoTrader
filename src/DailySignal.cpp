@@ -434,9 +434,10 @@ ReportFiles write_signal_report(const std::string &output_root, const SignalEval
 
     {
         std::ofstream out(files.bars_csv);
-        out << std::setprecision(17) << "date,ticker,open,close\n";
+        out << std::setprecision(17) << "date,ticker,open,high,low,close\n";
         for (const auto &bar : bars_used)
-            out << bar.date << ',' << bar.ticker << ',' << bar.open << ',' << bar.close << '\n';
+            out << bar.date << ',' << bar.ticker << ',' << bar.open << ',' << bar.high << ','
+                << bar.low << ',' << bar.close << '\n';
         if (!out)
             throw std::runtime_error("failed to write " + files.bars_csv);
     }
