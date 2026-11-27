@@ -476,7 +476,8 @@ IbkrQuote IbkrBroker::quote(std::uint64_t id, int type) {
     }
 }
 std::vector<Bar> IbkrBroker::historical_bars(std::uint64_t id, const std::string &duration,
-                                             const std::string &bar_size, const std::string &end) {
+                                             const std::string &bar_size, const std::string &end,
+                                             bool regular_hours) {
     auto &p = *impl_;
     if (!ready())
         throw std::runtime_error("not synchronized");
@@ -592,7 +593,7 @@ void IbkrBroker::unsubscribe(std::uint64_t) {
     unavailable();
 }
 std::vector<Bar> IbkrBroker::historical_bars(std::uint64_t, const std::string &, const std::string &,
-                                             const std::string &) {
+                                             const std::string &, bool) {
     unavailable();
 }
 IbkrQuote IbkrBroker::quote(std::uint64_t, int) {

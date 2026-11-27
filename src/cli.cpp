@@ -1,5 +1,6 @@
 #include "Backtester.hpp"
 #include "DailyLedger.hpp"
+#include "CrtBacktest.hpp"
 #include "DailySignal.hpp"
 #include "IbkrBroker.hpp"
 #include "TradingCalendar.hpp"
@@ -118,6 +119,78 @@ DailyExecution submit_daily_order(const IbkrConfig &config, const Instrument &in
         throw;
     }
     return result;
+}
+
+int run_crt_backtest(const std::unordered_map<std::string, std::string> &args,
+                     const std::vector<Instrument> &instruments, int argc, char **argv) {
+    auto value = [&](const std::string &key, const std::string &fallback = "") {
+        auto it = args.find(key);
+        return it == args.end() ? fallback : it->second;
+    };
+    auto number = [&](const std::string &key, const std::string &fallback) {
+        const auto text = value(key, fallback);
+        std::size_t used = 0;
+        const double parsed = std::stod(text, &used);
+        if (used != text.size() || !std::isfinite(parsed))
+            throw std::invalid_argument("invalid numeric option " + key);
+        return parsed;
+    };
+    const auto data_path = value("--data");
+    if (data_path.empty())
+        throw std::invalid_argument("crt-backtest needs --data FILE with intraday OHLC bars");
+    if (instruments.size() != 1)
+        throw std::invalid_argument("crt-backtest runs one instrument at a time");
+
+    CrtConfig config;
+    config.range_bars = static_cast<std::size_t>(number("--range-bars", "16"));
+    config.max_hold_bars = static_cast<std::size_t>(number("--max-hold-bars", "32"));
+    config.quantity = number("--quantity", "100");
+    config.fee = number("--fee", "1.10");
+    config.slippage_bps = static_cast<int>(number("--slippage-bps", "5"));
+    if (args.contains("--long-only"))
+        config.allow_shorts = false;
+
+    std::vector<Bar> bars;
+    CsvDataFeed feed(data_path);
+    feed.open();
+    while (auto bar = feed.next())
+        if (bar->ticker == instruments.front().ticker)
+            bars.push_back(*bar);
+    if (bars.empty())
+        throw std::runtime_error("no bars for the requested ticker in " + data_path);
+
+    const auto result = run_crt_backtest(bars, config);
+    if (!result.ok)
+        throw std::runtime_error(result.error);
+
+    std::string command;
+    for (int n = 0; n < argc; ++n)
+        command += (n ? " " : "") + std::string(argv[n]);
+    const auto stamp = utc_timestamp(static_cast<std::int64_t>(std::time(nullptr)));
+    const auto directory = value("--output", "results/crt") + "/" + utc_date(
+                               static_cast<std::int64_t>(std::time(nullptr))) + "_" + stamp;
+    const auto range_description =
+        std::to_string(config.range_bars) + "x15m candles";
+    write_crt_report(directory, result, config,
+                     "CSV " + data_path + " (" + std::to_string(bars.size()) + " bars, " +
+                         bars.front().date + " to " + bars.back().date + "); command: " + command,
+                     range_description);
+
+    int wins = 0;
+    for (const auto &t : result.trades)
+        if (t.pnl > 0)
+            ++wins;
+    std::cout << "CRT backtest: " << instruments.front().symbol << '\n'
+              << "  bars " << bars.size() << " (" << bars.front().date << " to "
+              << bars.back().date << ")\n"
+              << "  setups " << result.setups << ", trades " << result.trades.size() << ", wins "
+              << wins << '\n'
+              << "  net P&L " << (result.end_equity - result.start_equity) << " on "
+              << result.start_equity << " deployed (" << 100.0 * (result.end_equity - result.start_equity) / result.start_equity
+              << "%)\n"
+              << "  max drawdown " << 100.0 * result.max_drawdown << "%\n"
+              << "  report " << directory << "/report.md\n";
+    return 0;
 }
 
 int run_daily_signal(const std::unordered_map<std::string, std::string> &args,
@@ -430,6 +503,8 @@ algotrader ibkr-history --instruments FILE --port PORT --account DU... --output 
 algotrader ibkr-buy --instruments FILE --port PORT --account DU... --limit-price PRICE
   Preview by default; add --enable-orders yes to send ONE stock share (maximum limit $1000).
 algotrader ibkr-paper --instruments FILE --port PORT --account DU... --enable-orders yes [options]
+algotrader crt-backtest --instruments FILE --data INTRADAY_OHLC.csv [options]
+  Candle Range Theory research: 4H range (16x15m bars) -> 15m entry, stop and target.
 algotrader daily-signal --instruments FILE [--bars FILE | --port PORT --account DU...] [options]
   Daily SMA report: prior-window average, strategy target, broker position and open
   orders. Read-only unless --execute --enable-orders yes are BOTH given.
@@ -463,7 +538,7 @@ int main(int argc, char **argv) {
             return 0;
         }
         const std::string mode = argv[1];
-        if (mode != "backtest" && mode != "daily-signal" && mode != "ibkr-readonly" && mode != "ibkr-paper" && mode != "ibkr-history" && mode != "ibkr-buy" && mode != "ibkr-status" && mode != "ibkr-quotes")
+        if (mode != "backtest" && mode != "daily-signal" && mode != "crt-backtest" && mode != "ibkr-readonly" && mode != "ibkr-paper" && mode != "ibkr-history" && mode != "ibkr-buy" && mode != "ibkr-status" && mode != "ibkr-quotes")
             throw std::invalid_argument("unknown mode; use --help");
         std::unordered_map<std::string, std::string> args;
         const std::set<std::string> allowed = {"--instruments",   "--data",        "--strategy",
@@ -478,9 +553,11 @@ int main(int argc, char **argv) {
                                                "--duration",      "--bar-size",    "--end-time", "--limit-price", "--market-data-type",
                                                "--bars",          "--as-of",       "--max-stale-days",
                                                "--ledger",        "--limit-band-bps", "--execute",
-                                               "--wait-until-close"};
+                                               "--wait-until-close", "--extended-hours", "--range-bars", "--max-hold-bars",
+                                               "--long-only"};
         // Most options take a value; a few are bare switches.
-        const std::set<std::string> switches = {"--execute", "--wait-until-close"};
+        const std::set<std::string> switches = {"--execute", "--wait-until-close", "--extended-hours", "--range-bars", "--max-hold-bars",
+                                               "--long-only"};
         for (int i = 2; i < argc;) {
             const std::string key = argv[i];
             if (!allowed.contains(key))
@@ -515,6 +592,8 @@ int main(int argc, char **argv) {
         const auto instruments = load_instruments(value("--instruments"));
         if (mode == "daily-signal")
             return run_daily_signal(args, instruments, argc, argv);
+        if (mode == "crt-backtest")
+            return run_crt_backtest(args, instruments, argc, argv);
         Portfolio portfolio(num("--cash", "100000"), value("--currency", "USD"));
         for (const auto &i : instruments)
             portfolio.add_instrument(i);
@@ -749,7 +828,8 @@ int main(int argc, char **argv) {
                 if (mode == "ibkr-history") {
                     const auto bars =
                         broker.historical_bars(instruments.front().ticker, value("--duration", "1 M"),
-                                               value("--bar-size", "1 day"), value("--end-time"));
+                                               value("--bar-size", "1 day"), value("--end-time"),
+                                               !args.contains("--extended-hours"));
                     const std::filesystem::path output = value("--output", "results/history");
                     std::filesystem::create_directories(output);
                     std::ofstream out(output / "bars.csv");

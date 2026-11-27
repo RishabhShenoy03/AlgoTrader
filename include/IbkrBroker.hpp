@@ -31,7 +31,8 @@ class IbkrBroker : public Broker {
     // Read-only diagnostic. Waits for the configured timeout and cancels its subscription.
     IbkrQuote quote(std::uint64_t ticker, int market_data_type = 3);
     std::vector<Bar> historical_bars(std::uint64_t ticker, const std::string &duration,
-                                     const std::string &bar_size, const std::string &end_time = "");
+                                     const std::string &bar_size, const std::string &end_time = "",
+                                     bool regular_hours = true);
     void connect() override;
     void disconnect() override;
     bool ready() const override;
