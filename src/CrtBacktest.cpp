@@ -117,7 +117,10 @@ CrtResult run_crt_backtest(const std::vector<Bar> &bars, const CrtConfig &config
                 const bool stop_hit = direction == 1 ? bar.low <= stop : bar.high >= stop;
                 const bool target_hit = direction == 1 ? bar.high >= target : bar.low <= target;
                 if (stop_hit) {
-                    exit_price = stop;
+                    // A bar that opens beyond the stop fills at the open, not at the stop:
+                    // assuming the stop price on a gap is the classic way a backtest invents
+                    // money that a real stop order could not have captured.
+                    exit_price = direction == 1 ? std::min(stop, bar.open) : std::max(stop, bar.open);
                     reason = "stop";
                     exit_index = i;
                     break;
@@ -202,6 +205,17 @@ void write_crt_report(const std::string &directory, const CrtResult &result, con
     const double return_pct = 100.0 * total / result.start_equity;
 
     std::ostringstream md;
+    std::filesystem::create_directories(directory);
+    // Realised equity after each closed trade: the same series the return and drawdown are
+    // computed from. Unrealised excursions are not in it (stated in the report).
+    std::ofstream curve(directory + "/equity.csv");
+    curve << "trade,timestamp,equity\n" << std::setprecision(10);
+    double running_equity = result.start_equity;
+    curve << "0,start," << running_equity << '\n';
+    for (std::size_t i = 0; i < result.trades.size(); ++i) {
+        running_equity += result.trades[i].pnl;
+        curve << (i + 1) << ',' << result.trades[i].exit_time << ',' << running_equity << '\n';
+    }
     md << "# CRT backtest - " << range_description << "\n\n"
        << "- Source: " << source << "\n"
        << "- Candle: " << config.range_bars << " x 15m bars (4 hours of trading time)\n"
@@ -216,7 +230,8 @@ void write_crt_report(const std::string &directory, const CrtResult &result, con
        << "| Net P&L | " << std::fixed << std::setprecision(2) << total << " |\n"
        << "| Return on deployed capital | " << return_pct << "% |\n"
        << "| Max drawdown | " << 100.0 * result.max_drawdown << "% |\n"
-       << "| Gross win / loss | " << gross_win << " / " << gross_loss << " |\n\n"
+       << "| Sum of winning trades / losing trades (net of costs) | " << gross_win << " / "
+       << gross_loss << " |\n\n"
        << "## Rules frozen for this run\n\n"
        << "Range candle sets high/low; the next candle must trade beyond one side and close\n"
        << "back inside. Entry is the next 15-minute bar's open, fading the swept side. Stop at\n"
