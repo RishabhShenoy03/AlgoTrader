@@ -223,17 +223,19 @@ int run_crt_clock(const std::unordered_map<std::string, std::string> &args,
 
     double gross = 0, net = 0;
     for (const auto &t : result.trades) {
-        gross += t.gross;
+        gross += t.gross_pre_slippage;
         net += t.net;
     }
     std::cout << "Clock CRT: " << instrument.symbol << '\n'
               << "  candles " << result.candles.size() << " (" << result.incomplete_candles
               << " incomplete), pairs " << result.pairs_examined << '\n'
-              << "  setups " << result.setups << ", trades " << result.trades.size() << ", gross "
-              << gross << ", net " << net << ", max dd " << 100.0 * result.max_drawdown << "%\n"
-              << "  skipped: double-sided " << result.skipped_double_sided << ", gap "
-              << result.skipped_gap_beyond_target << ", cutoff " << result.skipped_cutoff
-              << ", no-next-bar " << result.skipped_no_next_bar << '\n'
+              << "  setups " << result.setups << ", trades " << result.trades.size()
+              << ", gross(pre-slip) " << gross << ", net " << net << ", max dd "
+              << 100.0 * result.max_drawdown << "%\n"
+              << "  skipped: double-sided " << result.skipped_double_sided << ", close-outside "
+              << result.skipped_close_outside << ", open-position " << result.skipped_open_position
+              << ", missing-entry " << result.skipped_missing_entry_bar << ", gap "
+              << result.skipped_gap_beyond_target << ", cutoff " << result.skipped_cutoff << '\n'
               << "  report " << directory << "/report.md\n";
     return 0;
 }
@@ -969,6 +971,9 @@ int main(int argc, char **argv) {
                     out.flush();
                     if (!out)
                         throw std::runtime_error("historical CSV write failed");
+                    std::cout << "Raw callback: " << bars.size() << " bars, first "
+                              << (bars.empty() ? "-" : bars.front().date) << ", last "
+                              << (bars.empty() ? "-" : bars.back().date) << '\n';
                     std::cout << "Saved " << bars.size() << " bars to " << (output / "bars.csv").string()
                               << '\n';
                     broker.disconnect();

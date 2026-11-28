@@ -1,5 +1,22 @@
 # CRT on gold futures: rules, data and result
 
+> **Correction (2026-11-28).** This report is preserved as historical evidence, but three
+> of its statements are wrong and were identified by an independent review:
+>
+> 1. **The 2026-12-20 close-out cutoff is unsafe.** First notice day for GC December 2026 is
+>    **2026-11-30**, so the cutoff sits 20 days *after* the contract can go to delivery. The
+>    corrected runs use 2026-11-20 and never hold through it.
+> 2. **"Gross P&L" already included slippage**, and net P&L ignored slippage entirely;
+>    slippage was computed and then dropped. The corrected engine reports pre-slippage,
+>    slippage, fees and net separately.
+> 3. **The signal rule was too loose**: a candle that swept one side and closed beyond the
+>    *opposite* boundary was accepted as a reclaim.
+>
+> The numbers below are the original, uncorrected results. Corrected figures, the full
+> claim-by-claim verdict and the new tests are in
+> [CRT_GOLD_AUDIT.md](CRT_GOLD_AUDIT.md). Nothing here should be quoted as a measurement of
+> the strategy without that document.
+
 Research experiment, 2026-11-28. Code revision: the commit that adds this file, on branch
 `feat/crt-gold`, based on `7c399f5`.
 
