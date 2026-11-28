@@ -107,6 +107,10 @@ CrtClockResult run_crt_clock(const std::vector<Bar> &bars, const CrtClockConfig 
         result.error = "no declared clock buckets";
         return result;
     }
+    if (!std::isfinite(config.max_hold_hours) || config.max_hold_hours <= 0 ||
+        std::floor(config.max_hold_hours * 4) != config.max_hold_hours * 4) {
+        result.error = "max hold must be a positive multiple of 15 minutes"; return result;
+    }
     for (const auto &b : config.buckets) {
         if (b.start_minute < 0 || b.start_minute >= 1440 || b.length_minutes <= 0 ||
             b.length_minutes % 15 != 0 || b.start_minute + b.length_minutes > 1440) {
@@ -226,10 +230,9 @@ CrtClockResult run_crt_clock(const std::vector<Bar> &bars, const CrtClockConfig 
         const bool same_day_next =
             !last_bucket && range.session_date == sweep.session_date &&
             sweep.start_minute == config.buckets[range_bucket + 1].start_minute;
-        const bool next_session_first =
-            last_bucket && sweep.start_minute == config.buckets.front().start_minute &&
-            sweep.start_utc > range.start_utc;
-        if (!same_day_next && !next_session_first)
+        // Without an exchange calendar, cross-session adjacency cannot be verified.
+        // Refuse such pairs rather than skipping missing sessions.
+        if (!same_day_next)
             continue;
 
         ++result.pairs_examined;
@@ -281,7 +284,9 @@ CrtClockResult run_crt_clock(const std::vector<Bar> &bars, const CrtClockConfig 
             continue;
         }
         const std::size_t entry_index = found->second;
-        if (entry_index < position_open_until) {
+        const auto signal_end = bar_index.find(sweep.end_utc);
+        if (signal_end == bar_index.end() || signal_end->second < position_open_until ||
+            entry_index < position_open_until) {
             ++result.skipped_open_position;
             continue;
         }
@@ -325,16 +330,24 @@ CrtClockResult run_crt_clock(const std::vector<Bar> &bars, const CrtClockConfig 
             et_local_from_utc(bar.date, bar_date, bar_minute);
 
             if (!config.cutoff_date.empty() && bar_date >= config.cutoff_date) {
-                exit_reference = j > entry_index ? bars[j - 1].close : bar.open;
-                exit_index = j > entry_index ? j - 1 : j;
-                reason = "cutoff";
-                break;
+                result.error = "open position reached cutoff: no verified scheduled exit; run stopped";
+                return result;
             }
-            if ((j - entry_index) >= max_bars) {
-                exit_reference = bars[j - 1].close;
-                exit_index = j - 1;
-                reason = "time";
-                break;
+            // Holding duration is a count of observed 15-minute bars, not elapsed time.
+            // A gap while holding makes stop/target ordering unknowable; fail closed.
+            if (j > entry_index) {
+                Stamp prior, current;
+                if (!parse_stamp(bars[j - 1].date, prior) || !parse_stamp(bar.date, current)) {
+                    result.error = "invalid timestamp while holding"; return result;
+                }
+                const auto seconds = [](const Stamp &s) {
+                    return days_from_civil(s.year, unsigned(s.month), unsigned(s.day)) * 86400 +
+                           s.hour * 3600 + s.minute * 60;
+                };
+                if (seconds(current) - seconds(prior) != 900) {
+                    result.error = "missing 15-minute bar while holding; exit is unknown";
+                    return result;
+                }
             }
             const bool stop_hit = direction == 1 ? bar.low <= trade.stop : bar.high >= trade.stop;
             const bool target_hit =
@@ -364,11 +377,15 @@ CrtClockResult run_crt_clock(const std::vector<Bar> &bars, const CrtClockConfig 
                 reason = "target";
                 break;
             }
-            if (j + 1 == bars.size()) {
+            if (j - entry_index + 1 >= max_bars) {
                 exit_reference = bar.close;
                 exit_index = j;
                 reason = "time";
                 break;
+            }
+            if (j + 1 == bars.size()) {
+                result.error = "data ended with an open position; exit is unknown";
+                return result;
             }
         }
         if (reason.empty()) {

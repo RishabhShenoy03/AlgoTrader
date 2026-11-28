@@ -137,6 +137,13 @@ void test_missing_full_session_does_not_pair() {
 }
 
 // --- signals -----------------------------------------------------------------------
+void test_cross_session_pair_rejected() {
+    std::vector<algo::Bar> b;
+    add_bucket(b, "2026-01-05", 18, 30, 105, 110, 100, 106);
+    add_bucket(b, "2026-01-07", 14, 30, 105, 108, 95, 104);
+    auto r = algo::run_crt_clock(b, cfg());
+    check(r.pairs_examined == 0, "cross-session pair is rejected without an exchange calendar");
+}
 void test_close_above_range_high_is_not_bullish() {
     auto b = bullish_fixture();
     // Replace the sweep bar: sweeps the low but closes ABOVE the range high (110).
@@ -199,8 +206,8 @@ void test_no_entry_while_position_open() {
     auto c = cfg();
     c.max_hold_hours = 24; // the first trade is still open when the second signal fires
     const auto r = algo::run_crt_clock(b, c);
-    check(r.trades.size() == 1, "only the first trade is taken");
-    check(r.skipped_open_position >= 1, "the overlapping signal is counted, not taken later");
+    check(!r.ok && r.error.find("missing 15-minute bar while holding") != std::string::npos,
+          "gap while holding stops the run rather than assuming an exit");
 }
 
 void test_cutoff_blocks_long_and_short() {
@@ -276,6 +283,7 @@ int main() {
     test_duplicate_off_grid_and_missing();
     test_missing_bar_makes_candle_incomplete();
     test_missing_full_session_does_not_pair();
+    test_cross_session_pair_rejected();
     test_close_above_range_high_is_not_bullish();
     test_close_below_range_low_is_not_bearish();
     test_equality_is_not_inside();

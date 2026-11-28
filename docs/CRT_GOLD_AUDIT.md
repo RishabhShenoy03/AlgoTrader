@@ -1,3 +1,7 @@
+> Follow-up safety changes: without a verified exchange calendar, cross-session candle pairs are refused. Runs stop if a position reaches the cutoff or encounters missing bars before a known exit; no prior close is retroactively assumed. Holding time counts consecutive 15-minute bars. Earlier results have not been recomputed under these rules.
+
+> Correction: the previous runner already included slippage in its reported net via slipped fills. The issue was the gross label and decomposition, not a missing slippage deduction. Corrected results also reflect adverse rounding and cutoff changes; do not attribute differences solely to slippage. Cross-session adjacency and trade lifecycle require further verification; do not use old results for trading.
+
 # Independent review of the gold CRT experiment (corrected)
 
 Review of `c88080a` on `feat/crt-gold`. Corrections live on `feat/crt-gold-audit` in new

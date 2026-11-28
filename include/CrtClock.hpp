@@ -33,7 +33,7 @@ struct CrtClockConfig {
     double fee{2.50};        // assumption per side, not an IBKR quote
     int slippage_bps{2};
     bool allow_shorts{true};
-    double max_hold_hours{8};
+    double max_hold_hours{8}; // count of 15-minute bars; gaps while holding stop the run
     std::string cutoff_date; // YYYY-MM-DD ET: no entry on/after, positions forced out before
 };
 
