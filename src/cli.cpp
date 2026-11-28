@@ -1,6 +1,7 @@
 #include "Backtester.hpp"
 #include "DailyLedger.hpp"
 #include "CrtBacktest.hpp"
+#include "CrtClock.hpp"
 #include "DailySignal.hpp"
 #include "IbkrBroker.hpp"
 #include "TradingCalendar.hpp"
@@ -119,6 +120,122 @@ DailyExecution submit_daily_order(const IbkrConfig &config, const Instrument &in
         throw;
     }
     return result;
+}
+
+int run_contract_lookup(const std::unordered_map<std::string, std::string> &args) {
+    auto value = [&](const std::string &key, const std::string &fallback = "") {
+        auto it = args.find(key);
+        return it == args.end() ? fallback : it->second;
+    };
+    const auto symbol = value("--symbol");
+    if (symbol.empty())
+        throw std::invalid_argument("ibkr-contract needs --symbol");
+    IbkrConfig config{value("--host", "127.0.0.1"),
+                      std::stoi(value("--port", "4002")),
+                      std::stoi(value("--client-id", "17")),
+                      value("--account"),
+                      true,
+                      value("--currency", "USD"),
+                      std::stoi(value("--timeout", "15")),
+                      30};
+    IbkrBroker ibkr(config);
+    ibkr.connect();
+    std::vector<ContractInfo> found;
+    try {
+        found = ibkr.resolve_contracts(symbol, value("--sec-type", "FUT"), value("--exchange", "SMART"),
+                                       value("--expiry", ""), value("--currency", "USD"));
+        ibkr.disconnect();
+    } catch (...) {
+        ibkr.disconnect();
+        throw;
+    }
+    for (const auto &c : found)
+        std::cout << c.con_id << "  " << c.symbol << " " << c.sec_type << " " << c.exchange << " "
+                  << c.currency << "  expiry " << c.expiry << "  multiplier " << c.multiplier
+                  << "  minTick " << c.min_tick << "  class " << c.trading_class << "  tz "
+                  << c.time_zone << "  " << c.long_name << '\n';
+    if (!found.empty())
+        std::cout << "tradingHours: " << found.front().trading_hours << '\n';
+    std::cout << found.size() << " contract(s)\n";
+    return 0;
+}
+
+int run_crt_clock(const std::unordered_map<std::string, std::string> &args,
+                  const std::vector<Instrument> &instruments, int argc, char **argv) {
+    auto value = [&](const std::string &key, const std::string &fallback = "") {
+        auto it = args.find(key);
+        return it == args.end() ? fallback : it->second;
+    };
+    auto number = [&](const std::string &key, const std::string &fallback) {
+        const auto text = value(key, fallback);
+        std::size_t used = 0;
+        const double parsed = std::stod(text, &used);
+        if (used != text.size() || !std::isfinite(parsed))
+            throw std::invalid_argument("invalid numeric option " + key);
+        return parsed;
+    };
+    const auto data_path = value("--data");
+    if (data_path.empty())
+        throw std::invalid_argument("crt-clock needs --data FILE");
+    if (instruments.size() != 1)
+        throw std::invalid_argument("crt-clock runs one instrument");
+
+    CrtClockConfig config;
+    const auto buckets = value("--buckets", "570:240,810:240");
+    std::stringstream bs(buckets);
+    std::string item;
+    while (std::getline(bs, item, ',')) {
+        const auto colon = item.find(':');
+        if (colon == std::string::npos)
+            throw std::invalid_argument("--buckets expects start:minutes pairs");
+        config.buckets.push_back({std::stoi(item.substr(0, colon)), std::stoi(item.substr(colon + 1))});
+    }
+    const auto &instrument = instruments.front();
+    config.multiplier = instrument.multiplier;
+    config.tick_size = instrument.tick_size;
+    config.quantity = number("--quantity", "1");
+    config.fee = number("--fee", "2.50");
+    config.slippage_bps = static_cast<int>(number("--slippage-bps", "2"));
+    config.max_hold_hours = number("--max-hold-hours", "8");
+    config.cutoff_date = value("--cutoff");
+    if (args.contains("--long-only"))
+        config.allow_shorts = false;
+
+    std::vector<Bar> bars;
+    CsvDataFeed feed(data_path);
+    feed.open();
+    while (auto b = feed.next())
+        if (b->ticker == instrument.ticker)
+            bars.push_back(*b);
+
+    const auto result = run_crt_clock(bars, config);
+    if (!result.ok)
+        throw std::runtime_error(result.error);
+
+    std::string command;
+    for (int n = 0; n < argc; ++n)
+        command += (n ? " " : "") + std::string(argv[n]);
+    const auto stamp_now = utc_timestamp(static_cast<std::int64_t>(std::time(nullptr)));
+    const auto directory = value("--output", "results/crt-clock") + "/" +
+                           utc_date(static_cast<std::int64_t>(std::time(nullptr))) + "_" + stamp_now;
+    write_crt_clock_report(directory, result, config,
+                           "CSV " + data_path + " (" + std::to_string(bars.size()) + " bars); command: " + command);
+
+    double gross = 0, net = 0;
+    for (const auto &t : result.trades) {
+        gross += t.gross;
+        net += t.net;
+    }
+    std::cout << "Clock CRT: " << instrument.symbol << '\n'
+              << "  candles " << result.candles.size() << " (" << result.incomplete_candles
+              << " incomplete), pairs " << result.pairs_examined << '\n'
+              << "  setups " << result.setups << ", trades " << result.trades.size() << ", gross "
+              << gross << ", net " << net << ", max dd " << 100.0 * result.max_drawdown << "%\n"
+              << "  skipped: double-sided " << result.skipped_double_sided << ", gap "
+              << result.skipped_gap_beyond_target << ", cutoff " << result.skipped_cutoff
+              << ", no-next-bar " << result.skipped_no_next_bar << '\n'
+              << "  report " << directory << "/report.md\n";
+    return 0;
 }
 
 int run_crt_backtest(const std::unordered_map<std::string, std::string> &args,
@@ -538,7 +655,7 @@ int main(int argc, char **argv) {
             return 0;
         }
         const std::string mode = argv[1];
-        if (mode != "backtest" && mode != "daily-signal" && mode != "crt-backtest" && mode != "ibkr-readonly" && mode != "ibkr-paper" && mode != "ibkr-history" && mode != "ibkr-buy" && mode != "ibkr-status" && mode != "ibkr-quotes")
+        if (mode != "backtest" && mode != "daily-signal" && mode != "crt-backtest" && mode != "crt-clock" && mode != "ibkr-contract" && mode != "ibkr-readonly" && mode != "ibkr-paper" && mode != "ibkr-history" && mode != "ibkr-buy" && mode != "ibkr-status" && mode != "ibkr-quotes")
             throw std::invalid_argument("unknown mode; use --help");
         std::unordered_map<std::string, std::string> args;
         const std::set<std::string> allowed = {"--instruments",   "--data",        "--strategy",
@@ -553,11 +670,15 @@ int main(int argc, char **argv) {
                                                "--duration",      "--bar-size",    "--end-time", "--limit-price", "--market-data-type",
                                                "--bars",          "--as-of",       "--max-stale-days",
                                                "--ledger",        "--limit-band-bps", "--execute",
+                                               "--range-bars", "--max-hold-bars", "--symbol",
+                                               "--sec-type", "--expiry", "--exchange",
+                                               "--buckets", "--max-hold-hours", "--cutoff",
                                                "--wait-until-close", "--extended-hours", "--range-bars", "--max-hold-bars",
-                                               "--long-only"};
+                                               "--long-only", "--symbol", "--sec-type", "--expiry",
+                                               "--exchange"};
         // Most options take a value; a few are bare switches.
-        const std::set<std::string> switches = {"--execute", "--wait-until-close", "--extended-hours", "--range-bars", "--max-hold-bars",
-                                               "--long-only"};
+        const std::set<std::string> switches = {"--execute",        "--wait-until-close",
+                                                "--extended-hours", "--long-only"};
         for (int i = 2; i < argc;) {
             const std::string key = argv[i];
             if (!allowed.contains(key))
@@ -589,11 +710,16 @@ int main(int argc, char **argv) {
                 throw std::invalid_argument("invalid integer option " + key);
             return static_cast<int>(x);
         };
+        // Contract lookup needs no instrument catalogue.
+        if (mode == "ibkr-contract")
+            return run_contract_lookup(args);
         const auto instruments = load_instruments(value("--instruments"));
         if (mode == "daily-signal")
             return run_daily_signal(args, instruments, argc, argv);
         if (mode == "crt-backtest")
             return run_crt_backtest(args, instruments, argc, argv);
+        if (mode == "crt-clock")
+            return run_crt_clock(args, instruments, argc, argv);
         Portfolio portfolio(num("--cash", "100000"), value("--currency", "USD"));
         for (const auto &i : instruments)
             portfolio.add_instrument(i);
@@ -676,6 +802,9 @@ int main(int argc, char **argv) {
                               value("--currency", "USD"),
                               integer("--timeout", "15"),
                               integer("--stale-seconds", "30")};
+            // A historical pull is a data request: it must not fail because the account
+            // holds some other instrument that this run's catalogue does not describe.
+            config.data_only = mode == "ibkr-history" || mode == "ibkr-quotes";
             IbkrBroker broker(config);
             broker.add_instrument(instruments.front());
             std::signal(SIGINT, signal_handler);

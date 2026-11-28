@@ -11,7 +11,7 @@ add_library(event_core
     src/CsvDataFeed.cpp src/MovingAverageStrategy.cpp src/BrokerSim.cpp
     src/OrderManager.cpp src/FillProcessor.cpp src/RiskManager.cpp
     src/PerformanceReport.cpp src/Backtester.cpp src/EventJournal.cpp
-    src/TradingApp.cpp src/IbkrBroker.cpp src/DailySignal.cpp src/CrtBacktest.cpp src/DailyLedger.cpp
+    src/TradingApp.cpp src/IbkrBroker.cpp src/DailySignal.cpp src/CrtBacktest.cpp src/CrtClock.cpp src/DailyLedger.cpp
     src/TradingCalendar.cpp)
 target_include_directories(event_core PUBLIC include)
 target_compile_options(event_core PRIVATE -Wall -Wextra -Wpedantic)
@@ -53,6 +53,9 @@ if(BUILD_TESTING)
     add_executable(crt_tests tests/crt_tests.cpp)
     target_link_libraries(crt_tests PRIVATE event_core)
     add_test(NAME crt_tests COMMAND crt_tests)
+    add_executable(crt_clock_tests tests/crt_clock_tests.cpp)
+    target_link_libraries(crt_clock_tests PRIVATE event_core)
+    add_test(NAME crt_clock_tests COMMAND crt_clock_tests)
     if(ALGO_WITH_IBKR)
         add_executable(ibkr_adapter_tests tests/ibkr_adapter_tests.cpp)
         target_link_libraries(ibkr_adapter_tests PRIVATE event_core ibkr_sdk)

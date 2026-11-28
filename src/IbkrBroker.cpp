@@ -47,6 +47,8 @@ struct IbkrBroker::Impl : DefaultEWrapper {
     std::unordered_map<std::uint64_t, int> subscriptions;
     std::unordered_map<int, int> contract_matches;
     std::unordered_set<std::uint64_t> verified_contracts;
+    std::unordered_map<int, std::vector<ContractInfo>> resolutions;
+    std::unordered_set<int> resolution_done;
     int quote_request{-1};
     IbkrQuote watchlist_quote;
     int history_request{-1};
@@ -150,8 +152,17 @@ struct IbkrBroker::Impl : DefaultEWrapper {
         if (account != config.paper_account || synchronized)
             return;
         const double q = DecimalFunctions::decimalToDouble(quantity);
-        if (std::abs(q) > 1e-9)
+        if (std::abs(q) <= 1e-9)
+            return;
+        try {
             snapshot.positions[ticker(contract.conId)] = q;
+        } catch (const std::exception &) {
+            if (!config.data_only)
+                throw;
+            std::cout << "IBKR notice: ignoring position in an instrument outside this "
+                         "catalogue (con_id "
+                      << contract.conId << ")\n";
+        }
     }
     void positionEnd() override {
         position_end = true;
@@ -179,6 +190,22 @@ struct IbkrBroker::Impl : DefaultEWrapper {
         completed();
     }
     void contractDetails(int req, const ContractDetails &details) override {
+        if (resolutions.contains(req)) {
+            const auto &d = details;
+            resolutions[req].push_back(ContractInfo{d.contract.conId,
+                                                    d.contract.symbol,
+                                                    d.contract.secType,
+                                                    d.contract.exchange,
+                                                    d.contract.currency,
+                                                    d.contract.lastTradeDateOrContractMonth,
+                                                    d.contract.multiplier,
+                                                    d.contract.tradingClass,
+                                                    d.minTick,
+                                                    d.longName,
+                                                    d.timeZoneId,
+                                                    d.tradingHours});
+            return;
+        }
         if (!requests.contains(req))
             return;
         auto id = requests.at(req);
@@ -218,6 +245,10 @@ struct IbkrBroker::Impl : DefaultEWrapper {
         contracts[id] = c;
     }
     void contractDetailsEnd(int req) override {
+        if (resolutions.contains(req)) {
+            resolution_done.insert(req);
+            return;
+        }
         if (contract_matches[req] != 1)
             fail("contract resolution must return exactly one match");
         else if (fatal.empty())
@@ -475,6 +506,40 @@ IbkrQuote IbkrBroker::quote(std::uint64_t id, int type) {
         throw;
     }
 }
+std::vector<ContractInfo> IbkrBroker::resolve_contracts(const std::string &symbol,
+                                                       const std::string &sec_type,
+                                                       const std::string &exchange,
+                                                       const std::string &expiry,
+                                                       const std::string &currency) {
+    auto &p = *impl_;
+    if (!p.client.isConnected())
+        throw std::runtime_error("IBKR not connected");
+    const int req = p.next_request++;
+    p.resolutions[req] = {};
+    Contract c;
+    c.symbol = symbol;
+    c.secType = sec_type;
+    c.exchange = exchange;
+    c.currency = currency;
+    c.lastTradeDateOrContractMonth = expiry;
+    p.client.reqContractDetails(req, c);
+    const auto deadline = std::chrono::steady_clock::now() + std::chrono::seconds(p.config.timeout_seconds);
+    while (!p.resolution_done.contains(req)) {
+        p.pump();
+        if (std::chrono::steady_clock::now() > deadline) {
+            p.resolutions.erase(req);
+            throw std::runtime_error("contract resolution timed out");
+        }
+    }
+    auto out = p.resolutions[req];
+    p.resolutions.erase(req);
+    p.resolution_done.erase(req);
+    std::sort(out.begin(), out.end(), [](const ContractInfo &a, const ContractInfo &b) {
+        return a.expiry != b.expiry ? a.expiry < b.expiry : a.con_id < b.con_id;
+    });
+    return out;
+}
+
 std::vector<Bar> IbkrBroker::historical_bars(std::uint64_t id, const std::string &duration,
                                              const std::string &bar_size, const std::string &end,
                                              bool regular_hours) {
@@ -590,6 +655,11 @@ void IbkrBroker::subscribe(std::uint64_t) {
     unavailable();
 }
 void IbkrBroker::unsubscribe(std::uint64_t) {
+    unavailable();
+}
+std::vector<ContractInfo> IbkrBroker::resolve_contracts(const std::string &, const std::string &,
+                                                       const std::string &, const std::string &,
+                                                       const std::string &) {
     unavailable();
 }
 std::vector<Bar> IbkrBroker::historical_bars(std::uint64_t, const std::string &, const std::string &,
